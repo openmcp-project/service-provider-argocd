@@ -1,0 +1,83 @@
+version: 3
+
+includes:
+  shared:
+    taskfile: hack/common/Taskfile_controller.yaml
+    flatten: true
+
+tasks:
+  dev:gen:
+    desc: "Execute the template for local development"
+    vars:
+      debug: '{{.debug | default "false"}}'
+      workloadcluster: '{{.workloadcluster | default "false"}}'
+      secretwatcher: '{{.secretwatcher | default "false"}}'
+      samplecode: '{{ .samplecode | default "false"}}'
+    env:
+      DEBUG: "{{ .debug }}"
+      KIND: "Example"
+      KIND_LOWER: "example"
+      PROVIDER_NAME: "example"
+      MODULE: "github.com/openmcp-project/service-provider-example"
+      WORKLOADCLUSTER: "{{ .workloadcluster }}"
+      SECRETWATCHER: "{{ .secretwatcher }}"
+      SAMPLECODE: "{{ .samplecode }}"
+    cmds:
+      - go generate ./...
+      - go mod edit -module $MODULE
+
+  dev:img:
+    desc: "Build image for current platform and tag for testing"
+    vars:
+      VERSION:
+        sh: $COMMON_SCRIPT_DIR/get-version.sh
+      ARCH:
+        sh: uname -m | {{.ROOT_DIR}}/hack/common/sed.sh 's/x86_64/amd64/;s/aarch64/arm64/'
+    cmds:
+      - task: dev:gen
+        vars:
+          debug: "{{.debug}}"
+          workloadcluster: "{{.workloadcluster}}"
+          secretwatcher: "{{.secretwatcher}}"
+          samplecode: "{{.samplecode}}"
+      - task: build:img:build
+      - docker tag ghcr.io/openmcp-project/images/{{.COMPONENTS}}:{{.VERSION}}-linux-{{ARCH}} ghcr.io/openmcp-project/images/service-provider-example:{{.VERSION}}
+
+  dev:e2e:
+    desc: "Build image and run e2e tests"
+    cmds:
+      - task: dev:img
+        vars:
+          debug: "{{.debug}}"
+          workloadcluster: "{{.workloadcluster}}"
+          secretwatcher: "{{.secretwatcher}}"
+          samplecode: "{{.samplecode}}"
+      - go test -v ./test/e2e/... -count=1
+
+  generate-provider:
+    desc: "Generate Service Provider with opencontrolplane-gen transformation"
+    vars:
+      dryrun: '{{.dryrun | default "false"}}'
+      api: '{{.api | default "Example"}}'
+      name: '{{.name | default "example"}}'
+      module: '{{.module | default "github.com/openmcp-project/service-provider-example"}}'
+      workloadcluster: '{{.workloadcluster | default "false"}}'
+      secretwatcher: '{{.secretwatcher | default "false"}}'
+      samplecode: '{{ .samplecode | default "false"}}'
+    env:
+      KIND: "{{ .api }}"
+      KIND_LOWER: "{{ lower .api }}"
+      PROVIDER_NAME: "{{ lower .name }}"
+      CMD_FOLDER: "service-provider-{{ lower .name }}"
+      MODULE: "{{ .module }}"
+      WORKLOADCLUSTER: "{{ .workloadcluster }}"
+      SECRETWATCHER: "{{ .secretwatcher }}"
+      SAMPLECODE: "{{ .samplecode }}"
+    cmds:
+      - DRY_RUN={{.dryrun}} go generate ./...
+      - cmd: mv ./cmd/service-provider-template ./cmd/${CMD_FOLDER}
+        if: '{{ eq .dryrun "false" }}'
+      - cmd: go mod edit -module {{.module}}
+        if: '{{ eq .dryrun "false" }}'
+      - cmd: "{{.ROOT_DIR}}/hack/common/sed.sh 's/service-provider-template/service-provider-{{.name}}/g' Taskfile.yaml"
+        if: '{{ eq .dryrun "false" }}'

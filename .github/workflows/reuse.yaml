@@ -1,0 +1,11 @@
+name: REUSE Compliance Check
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  run_reuse:
+    uses: openmcp-project/build/.github/workflows/reuse.lib.yaml@9c79f905cb470255a870477cad69de0115a70cc5 # main
+    secrets: inherit
