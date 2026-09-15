@@ -6,14 +6,14 @@ metadata:
     controller-gen.kubebuilder.io/version: v0.20.1
   labels:
     openmcp.cloud/cluster: onboarding
-  name: foos.foo.services.open-control-plane.io
+  name: argocds.argocd.services.open-control-plane.io
 spec:
-  group: foo.services.open-control-plane.io
+  group: argocd.services.open-control-plane.io
   names:
-    kind: Foo
-    listKind: FooList
-    plural: foos
-    singular: foo
+    kind: ArgoCD
+    listKind: ArgoCDList
+    plural: argocds
+    singular: argocd
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
@@ -26,10 +26,7 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: |-
-          opencontrolplane-gen:replace Foo=KIND foo=KIND_LOWER
-          Foo is the Schema for the foos API
-          opencontrolplane-gen:replace Foo=KIND
+        description: ArgoCD is the Schema for the argocds API
         properties:
           apiVersion:
             description: |-
@@ -49,23 +46,19 @@ spec:
           metadata:
             type: object
           spec:
-            description: |-
-              opencontrolplane-gen:replace Foo=KIND
-              spec defines the desired state of Foo
-              opencontrolplane-gen:replace Foo=KIND
+            description: spec defines the desired state of ArgoCD
             properties:
-              foo:
+              version:
                 description: |-
-                  opencontrolplane-gen:replace Foo=KIND
-                  foo is an example field of Foo. Edit api_types.go to remove/update
-                  opencontrolplane-gen:replace Foo=KIND
+                  Version selects which ArgoCD version to install. The value must match one
+                  of the versions declared in the ProviderConfig's spec.versions list.
+                minLength: 1
                 type: string
+            required:
+            - version
             type: object
           status:
-            description: |-
-              opencontrolplane-gen:replace Foo=KIND
-              status defines the observed state of Foo
-              opencontrolplane-gen:replace Foo=KIND
+            description: status defines the observed state of ArgoCD
             properties:
               conditions:
                 description: Conditions contains the conditions.

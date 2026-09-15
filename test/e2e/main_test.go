@@ -1,4 +1,3 @@
-//go:generate opencontrolplane-gen
 package e2e
 
 import (
@@ -15,6 +14,8 @@ import (
 
 	"github.com/openmcp-project/openmcp-testing/pkg/providers"
 	"github.com/openmcp-project/openmcp-testing/pkg/setup"
+	"github.com/openmcp-project/openmcp-testing/pkg/setup/extensions"
+	"github.com/openmcp-project/openmcp-testing/pkg/setup/extensions/fluxcd"
 )
 
 var testenv env.Environment
@@ -40,12 +41,13 @@ func TestMain(m *testing.M) {
 		},
 		ServiceProviders: []providers.ServiceProviderSetup{
 			{
-				// opencontrolplane-gen:replace foo=KIND_LOWER
-				Name: "foo",
-				// opencontrolplane-gen:replace template=PROVIDER_NAME
-				Image:              fmt.Sprintf("ghcr.io/openmcp-project/images/service-provider-template:%s", version),
+				Name:               "argocd",
+				Image:              fmt.Sprintf("ghcr.io/openmcp-project/images/service-provider-argocd:%s", version),
 				LoadImageToCluster: true,
 			},
+		},
+		Extensions: []extensions.Extension{
+			&fluxcd.FluxCD{},
 		},
 	}
 	testenv = env.NewWithConfig(envconf.New().WithNamespace(openmcp.Namespace))

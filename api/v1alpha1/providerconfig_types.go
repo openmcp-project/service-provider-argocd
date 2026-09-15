@@ -19,6 +19,7 @@ package v1alpha1
 import (
 	"time"
 
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
@@ -28,27 +29,62 @@ import (
 
 // ProviderConfigSpec defines the desired state of ProviderConfig
 type ProviderConfigSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-	// The following markers will use OpenAPI v3 schema to validate the value
-	// More info: https://book.kubebuilder.io/reference/markers/crd-validation.html
+	// Versions specify the valid inputs for the ArgoCD.Spec.Version field.
+	// Each entry describes an installable ArgoCD version and its deployment
+	// artifacts (Helm chart coordinates and values).
+	// +required
+	Versions []ArgoCDVersion `json:"versions"`
 
-	// foo is an example field of ProviderConfig. Edit providerconfig_types.go to remove/update
+	// PollInterval determines how often to reconcile resources to prevent drift.
 	// +optional
 	// +kubebuilder:default:="1m"
 	// +kubebuilder:validation:Format=duration
 	PollInterval *metav1.Duration `json:"pollInterval,omitempty"`
+
+	// namespaceOverride overrides the default namespace into which ArgoCD is
+	// installed on the target cluster. If empty, the provider's default
+	// namespace is used.
+	// +optional
+	NamespaceOverride string `json:"namespaceOverride,omitempty"`
+}
+
+// ArgoCDVersion defines a version of ArgoCD that can be installed.
+type ArgoCDVersion struct {
+	// Version is the ArgoCD version to install.
+	// This value is compared with ArgoCD.Spec.Version to define the available
+	// versions and the deployment artifacts of a version.
+	// +required
+	Version string `json:"version"`
+
+	// ChartVersion is the version of the Helm chart to install.
+	// +required
+	ChartVersion string `json:"chartVersion"`
+
+	// ChartURL is the OCI registry URL for the ArgoCD Helm chart.
+	// +optional
+	// +kubebuilder:default="oci://ghcr.io/argoproj/argo-helm/argo-cd"
+	ChartURL *string `json:"chartUrl,omitempty"`
+
+	// ChartPullSecret is the name of a Secret in the service provider's namespace
+	// containing credentials to pull the Helm chart from a private OCI registry.
+	// The secret must be of type kubernetes.io/dockerconfigjson.
+	// +optional
+	ChartPullSecret string `json:"chartPullSecret,omitempty"`
+
+	// Values contains Helm values to override defaults for the ArgoCD deployment.
+	// This field supports all configuration options from the ArgoCD Helm chart.
+	//
+	// Image pull secrets for ArgoCD components should be specified via
+	// values.imagePullSecrets. Any secrets referenced there will be copied from
+	// the service provider's namespace to the ArgoCD namespace on the
+	// ManagedControlPlane.
+	// +optional
+	Values *apiextensionsv1.JSON `json:"values,omitempty"`
 }
 
 // ProviderConfigStatus defines the observed state of ProviderConfig.
 type ProviderConfigStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-
-	// For Kubernetes API conventions, see:
-	// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#typical-status-properties
-
-	// conditions represent the current state of the ProviderConfig resource.
+	// Conditions represent the current state of the ProviderConfig resource.
 	// Each condition has a unique type and reflects the status of a specific aspect of the resource.
 	//
 	// Standard condition types include:
@@ -100,8 +136,23 @@ func init() {
 	})
 }
 
-// PollInterval returns the poll interval duration from the spec.
+// PollInterval returns the poll interval duration from the spec, falling back
+// to DefaultPollInterval when it is not set.
 func (o *ProviderConfig) PollInterval() time.Duration {
-	// TODO pollInterval has to be required
+	if o.Spec.PollInterval == nil {
+		return DefaultPollInterval
+	}
 	return o.Spec.PollInterval.Duration
+}
+
+// SelectVersion returns the ArgoCDVersion matching the requested version from
+// the ProviderConfig's spec.versions list. The second return value is false if
+// no matching version is configured.
+func (o *ProviderConfig) SelectVersion(requestedVersion string) (ArgoCDVersion, bool) {
+	for _, v := range o.Spec.Versions {
+		if v.Version == requestedVersion {
+			return v, true
+		}
+	}
+	return ArgoCDVersion{}, false
 }

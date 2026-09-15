@@ -1,4 +1,3 @@
-//go:generate opencontrolplane-gen
 package e2e
 
 import (
@@ -6,44 +5,76 @@ import (
 	"testing"
 	"time"
 
-	// opencontrolplane-gen:if SAMPLECODE=true
 	corev1 "k8s.io/api/core/v1"
 	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/utils/ptr"
 
-	"sigs.k8s.io/e2e-framework/klient/wait/conditions"
-	// opencontrolplane-gen:fi
 	"sigs.k8s.io/e2e-framework/klient/wait"
+	"sigs.k8s.io/e2e-framework/klient/wait/conditions"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/features"
 
-	// opencontrolplane-gen:if SAMPLECODE=true
 	"github.com/openmcp-project/openmcp-testing/pkg/clusterutils"
-	// opencontrolplane-gen:fi
 	"github.com/openmcp-project/openmcp-testing/pkg/providers"
 
-	// opencontrolplane-gen:replace github.com/openmcp-project/service-provider-template=MODULE
-	apiv1alpha1 "github.com/openmcp-project/service-provider-template/api/v1alpha1"
-	// opencontrolplane-gen:if SAMPLECODE=true
 	openmcpconditions "github.com/openmcp-project/openmcp-testing/pkg/conditions"
-	// opencontrolplane-gen:fi
+	apiv1alpha1 "github.com/openmcp-project/service-provider-template/api/v1alpha1"
 )
+
+// Test fixtures for the ArgoCD version offered by the ProviderConfig and
+// requested by the ArgoCD resource. Keep these in sync with the chart that is
+// actually published at the given URL.
+const (
+	testArgoCDVersion      = "3.5.1"
+	testArgoCDChartVersion = "10.4.0"
+	testArgoCDChartURL     = "oci://ghcr.io/argoproj/argo-helm/argo-cd"
+)
+
+// newApplication returns a minimal but schema-valid ArgoCD Application used as
+// the domain object in the e2e tests. The Application CRD requires spec fields
+// (project, source, destination), so an empty object is rejected on create.
+func newApplication() *unstructured.Unstructured {
+	obj := &unstructured.Unstructured{}
+	obj.SetName("test-domain-object")
+	obj.SetNamespace("argocd")
+	obj.SetAPIVersion("argoproj.io/v1alpha1")
+	obj.SetKind("Application")
+	obj.Object["spec"] = map[string]interface{}{
+		"project": "default",
+		"source": map[string]interface{}{
+			"repoURL":        "https://github.com/argoproj/argocd-example-apps.git",
+			"path":           "guestbook",
+			"targetRevision": "HEAD",
+		},
+		"destination": map[string]interface{}{
+			"server":    "https://kubernetes.default.svc",
+			"namespace": "default",
+		},
+	}
+	return obj
+}
 
 func TestServiceProvider(t *testing.T) {
 	basicProviderTest := features.New("provider test").
 		Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 			apiv1alpha1.AddToScheme(c.Client().Resources().GetScheme())
 			config := &apiv1alpha1.ProviderConfig{}
-			// opencontrolplane-gen:replace configname=PROVIDER_NAME
-			config.SetName("configname")
+			config.SetName("argocd")
+			config.Spec.Versions = []apiv1alpha1.ArgoCDVersion{
+				{
+					Version:      testArgoCDVersion,
+					ChartVersion: testArgoCDChartVersion,
+					ChartURL:     ptr.To(testArgoCDChartURL),
+				},
+			}
 			if err := c.Client().Resources().Create(ctx, config); err != nil {
 				t.Errorf("failed to create ProviderConfig object: %v", err)
 			}
 			return ctx
 		}).
 		Setup(providers.CreateMCP("test-controlplane")).
-		// opencontrolplane-gen:if SAMPLECODE=true
 		Assess("verify provider can be successfully consumed",
 			func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				config := c
@@ -53,13 +84,12 @@ func TestServiceProvider(t *testing.T) {
 					return ctx
 				}
 				apiv1alpha1.AddToScheme(config.Client().Resources().GetScheme())
-				// opencontrolplane-gen:replace Foo=KIND
-				api := &apiv1alpha1.Foo{}
+				api := &apiv1alpha1.ArgoCD{}
 				api.SetName("test-controlplane")
 				api.SetNamespace("default")
+				api.Spec.Version = testArgoCDVersion
 				if err := config.Client().Resources().Create(ctx, api); err != nil {
-					// opencontrolplane-gen:replace Foo=KIND
-					t.Errorf("failed to create Foo object: %v", err)
+					t.Errorf("failed to create ArgoCD object: %v", err)
 				}
 				if err := wait.For(openmcpconditions.Match(api, config, "Ready", corev1.ConditionTrue)); err != nil {
 					t.Error(err)
@@ -74,11 +104,7 @@ func TestServiceProvider(t *testing.T) {
 					t.Error(err)
 					return ctx
 				}
-				domainObj := &unstructured.Unstructured{}
-				domainObj.SetName("test-domain-object")
-				domainObj.SetNamespace("default")
-				domainObj.SetAPIVersion("example.domain/v1alpha1")
-				domainObj.SetKind("Foo")
+				domainObj := newApplication()
 				if err := mcpConfig.Client().Resources().Create(ctx, domainObj); err != nil {
 					t.Errorf("failed to create domain object on controlplane: %v", err)
 				}
@@ -94,13 +120,11 @@ func TestServiceProvider(t *testing.T) {
 					return ctx
 				}
 				apiv1alpha1.AddToScheme(config.Client().Resources().GetScheme())
-				// opencontrolplane-gen:replace Foo=KIND
-				api := &apiv1alpha1.Foo{}
+				api := &apiv1alpha1.ArgoCD{}
 				api.SetName("test-controlplane")
 				api.SetNamespace("default")
 				if err := config.Client().Resources().Delete(ctx, api); err != nil {
-					// opencontrolplane-gen:replace Foo=KIND
-					t.Errorf("failed to delete Foo object: %v", err)
+					t.Errorf("failed to delete ArgoCD object: %v", err)
 				}
 				// verify object is stuck in Terminating with UserResourcesPresent reason
 				if err := wait.For(func(ctx context.Context) (bool, error) {
@@ -124,13 +148,9 @@ func TestServiceProvider(t *testing.T) {
 					t.Error(err)
 					return ctx
 				}
-				domainObj := &unstructured.Unstructured{}
-				domainObj.SetName("test-domain-object")
-				domainObj.SetNamespace("default")
-				domainObj.SetAPIVersion("example.domain/v1alpha1")
-				domainObj.SetKind("Foo")
+				domainObj := newApplication()
 				if err := mcpConfig.Client().Resources().Delete(ctx, domainObj); err != nil {
-					t.Errorf("failed to create domain object on controlplane: %v", err)
+					t.Errorf("failed to delete domain object on controlplane: %v", err)
 				}
 				return ctx
 			},
@@ -144,21 +164,15 @@ func TestServiceProvider(t *testing.T) {
 					return ctx
 				}
 				apiv1alpha1.AddToScheme(config.Client().Resources().GetScheme())
-				// opencontrolplane-gen:replace Foo=KIND
-				api := &apiv1alpha1.Foo{}
+				api := &apiv1alpha1.ArgoCD{}
 				api.SetName("test-controlplane")
 				api.SetNamespace("default")
 				if err := wait.For(conditions.New(config.Client().Resources()).ResourceDeleted(api)); err != nil {
-					// opencontrolplane-gen:replace Foo=KIND
-					t.Errorf("expected Foo to be deleted after domain object removal, but it still exists: %v", err)
+					t.Errorf("expected ArgoCD to be deleted after domain object removal, but it still exists: %v", err)
 				}
 				return ctx
 			},
 		).
-		// opencontrolplane-gen:fi
-		// opencontrolplane-gen:if SAMPLECODE=false
-		// TODO add assess steps
-		// opencontrolplane-gen:fi
 		Teardown(providers.DeleteMCP("test-controlplane", wait.WithTimeout(5*time.Minute)))
 	testenv.Test(t, basicProviderTest.Feature())
 }
