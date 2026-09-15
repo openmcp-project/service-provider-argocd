@@ -31,8 +31,8 @@ import (
 	clusteraccess "github.com/openmcp-project/opencontrolplane-runtime/pkg/serviceprovider/clusteraccess"
 	libutils "github.com/openmcp-project/openmcp-operator/lib/utils"
 
-	apiv1alpha1 "github.com/openmcp-project/service-provider-template/api/v1alpha1"
-	"github.com/openmcp-project/service-provider-template/internal/argocd"
+	apiv1alpha1 "github.com/openmcp-project/service-provider-argocd/api/v1alpha1"
+	"github.com/openmcp-project/service-provider-argocd/internal/argocd"
 )
 
 // Condition reasons surfaced on the ArgoCD resource status.

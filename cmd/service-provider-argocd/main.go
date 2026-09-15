@@ -56,9 +56,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	"github.com/openmcp-project/service-provider-template/api/crds"
-	argocdsv1alpha1 "github.com/openmcp-project/service-provider-template/api/v1alpha1"
-	"github.com/openmcp-project/service-provider-template/internal/controller"
+	"github.com/openmcp-project/service-provider-argocd/api/crds"
+	argocdsv1alpha1 "github.com/openmcp-project/service-provider-argocd/api/v1alpha1"
+	"github.com/openmcp-project/service-provider-argocd/internal/controller"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
@@ -302,7 +302,7 @@ func main() {
 		WebhookServer:          webhookServer,
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
-		LeaderElectionID:       "github.com/openmcp-project/service-provider-template",
+		LeaderElectionID:       "github.com/openmcp-project/service-provider-argocd",
 		// LeaderElectionReleaseOnCancel defines if the leader should step down voluntarily
 		// when the Manager ends. This requires the binary to immediately end when the
 		// Manager is stopped, otherwise, this setting is unsafe. Setting this significantly

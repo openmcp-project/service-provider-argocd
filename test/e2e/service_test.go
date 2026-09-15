@@ -20,7 +20,7 @@ import (
 	"github.com/openmcp-project/openmcp-testing/pkg/providers"
 
 	openmcpconditions "github.com/openmcp-project/openmcp-testing/pkg/conditions"
-	apiv1alpha1 "github.com/openmcp-project/service-provider-template/api/v1alpha1"
+	apiv1alpha1 "github.com/openmcp-project/service-provider-argocd/api/v1alpha1"
 )
 
 // Test fixtures for the ArgoCD version offered by the ProviderConfig and

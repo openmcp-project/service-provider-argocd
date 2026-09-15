@@ -75,9 +75,9 @@ tasks:
       SAMPLECODE: "{{ .samplecode }}"
     cmds:
       - DRY_RUN={{.dryrun}} go generate ./...
-      - cmd: mv ./cmd/service-provider-template ./cmd/${CMD_FOLDER}
+      - cmd: mv ./cmd/service-provider-argocd ./cmd/${CMD_FOLDER}
         if: '{{ eq .dryrun "false" }}'
       - cmd: go mod edit -module {{.module}}
         if: '{{ eq .dryrun "false" }}'
-      - cmd: "{{.ROOT_DIR}}/hack/common/sed.sh 's/service-provider-template/service-provider-{{.name}}/g' Taskfile.yaml"
+      - cmd: "{{.ROOT_DIR}}/hack/common/sed.sh 's/service-provider-argocd/service-provider-{{.name}}/g' Taskfile.yaml"
         if: '{{ eq .dryrun "false" }}'

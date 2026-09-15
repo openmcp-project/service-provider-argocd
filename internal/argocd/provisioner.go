@@ -16,7 +16,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
-	apiv1alpha1 "github.com/openmcp-project/service-provider-template/api/v1alpha1"
+	apiv1alpha1 "github.com/openmcp-project/service-provider-argocd/api/v1alpha1"
 )
 
 // Provisioner installs ArgoCD onto a Managed Control Plane by declaring Flux
