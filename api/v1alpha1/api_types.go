@@ -34,6 +34,12 @@ type ArgoCDSpec struct {
 	// +required
 	// +kubebuilder:validation:MinLength=1
 	Version string `json:"version"`
+
+	// namespaceOverride overrides the default namespace into which ArgoCD is
+	// installed on the target cluster. If empty, the provider's default
+	// namespace is used.
+	// +optional
+	NamespaceOverride string `json:"namespaceOverride,omitempty"`
 }
 
 // ArgoCDStatus defines the observed state of ArgoCD.

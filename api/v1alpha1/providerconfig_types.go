@@ -40,12 +40,6 @@ type ProviderConfigSpec struct {
 	// +kubebuilder:default:="1m"
 	// +kubebuilder:validation:Format=duration
 	PollInterval *metav1.Duration `json:"pollInterval,omitempty"`
-
-	// namespaceOverride overrides the default namespace into which ArgoCD is
-	// installed on the target cluster. If empty, the provider's default
-	// namespace is used.
-	// +optional
-	NamespaceOverride string `json:"namespaceOverride,omitempty"`
 }
 
 // ArgoCDVersion defines a version of ArgoCD that can be installed.

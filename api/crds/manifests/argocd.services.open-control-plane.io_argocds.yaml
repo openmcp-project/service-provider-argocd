@@ -48,6 +48,12 @@ spec:
           spec:
             description: spec defines the desired state of ArgoCD
             properties:
+              namespaceOverride:
+                description: |-
+                  namespaceOverride overrides the default namespace into which ArgoCD is
+                  installed on the target cluster. If empty, the provider's default
+                  namespace is used.
+                type: string
               version:
                 description: |-
                   Version selects which ArgoCD version to install. The value must match one

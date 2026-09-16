@@ -167,17 +167,17 @@ func (r *ArgoCDReconciler) newProvisioner(obj *apiv1alpha1.ArgoCD, pc *apiv1alph
 		PlatformClient:       r.PlatformCluster.Client(),
 		MCPClient:            clusterCtx.MCPCluster.Client(),
 		TenantNamespace:      tenantNamespace,
-		MCPNamespace:         providerNamespace(pc),
+		MCPNamespace:         providerNamespace(obj),
 		KubeConfigSecretName: clusterCtx.MCPAccessSecretKey.Name,
 		PollInterval:         pc.PollInterval(),
 	}), nil
 }
 
-// providerNamespace resolves the target MCP namespace from the ProviderConfig,
+// providerNamespace resolves the target MCP namespace from the ArgoCD object,
 // tolerating a nil config.
-func providerNamespace(pc *apiv1alpha1.ProviderConfig) string {
-	if pc == nil {
+func providerNamespace(obj *apiv1alpha1.ArgoCD) string {
+	if obj == nil {
 		return ""
 	}
-	return pc.Spec.NamespaceOverride
+	return obj.Spec.NamespaceOverride
 }
