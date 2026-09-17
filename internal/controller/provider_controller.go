@@ -134,7 +134,7 @@ func (r *ArgoCDReconciler) Delete(ctx context.Context, obj *apiv1alpha1.ArgoCD, 
 
 	if err := provisioner.Uninstall(ctx); err != nil {
 		log.Error(err, "failed to uninstall ArgoCD")
-		serviceprovider.StatusProgressing(obj, reasonUninstalling, err.Error())
+		serviceprovider.StatusTerminatingWithReason(obj, reasonUninstalling, err.Error())
 		return ctrl.Result{}, err
 	}
 

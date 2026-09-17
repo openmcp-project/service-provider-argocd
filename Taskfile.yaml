@@ -13,8 +13,6 @@ includes:
   shared:
     taskfile: hack/common/Taskfile_controller.yaml
     flatten: true
-  template: 
-    taskfile: Taskfile_template.yaml
 
 tasks:
   build:img:build-test:
