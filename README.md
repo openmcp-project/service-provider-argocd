@@ -2,6 +2,133 @@
 
 # service-provider-argocd
 
+A service provider for managing [Argo CD](https://argo-cd.readthedocs.io/) deployments within a ManagedControlPlane environment. This provider enables GitOps capabilities by automatically installing and configuring Argo CD on managed control planes.
+
+## Architecture Overview
+
+Service Provider Argo CD runs on the platform cluster of an [Open Control Plane installation](https://openmcp-project.github.io/docs/operators/overview). It reconciles `ArgoCD` resources and installs [Argo CD](https://argo-cd.readthedocs.io/) onto the ManagedControlPlane of the requesting tenant using Flux (`OCIRepository` + `HelmRelease`).
+
+```mermaid
+flowchart LR
+
+  subgraph PC[Platform Cluster]
+    spargocd[Service Provider Argo CD]
+
+    subgraph TN[Tenant Namespace]
+      ocirepo([OCIRepository])
+      helmrel([HelmRelease])
+    end
+  end
+
+  subgraph OC[Onboarding Cluster]
+    spapi([ArgoCD])
+    mcpapi([ManagedControlPlane])
+
+    spapi -- references --> mcpapi
+  end
+
+  subgraph mcp[ManagedControlPlane]
+    subgraph AS[argocd namespace]
+      argocdctrl[Argo CD Components]
+    end
+  end
+
+  spargocd -- reconciles --> spapi
+  spargocd -- creates --> ocirepo
+  spargocd -- creates --> helmrel
+  helmrel -- installs --> argocdctrl
+  mcpapi -- represents --> mcp
+```
+
+## API Reference
+
+### ArgoCD
+
+The `ArgoCD` resource represents an Argo CD installation for a `ManagedControlPlane`.
+
+```yaml
+apiVersion: argocd.services.open-control-plane.io/v1alpha1
+kind: ArgoCD
+metadata:
+  name: my-argocd
+spec:
+  version: "v3.1.0"
+  # Optional: namespace on the ManagedControlPlane to install Argo CD into.
+  namespaceOverride: argocd
+```
+
+| Field                   | Type   | Description                                                                           |
+| ----------------------- | ------ | ------------------------------------------------------------------------------------- |
+| `spec.version`          | string | The Argo CD version to install. Must match a version defined in the `ProviderConfig`. |
+| `spec.namespaceOverride`| string | Target namespace on the ManagedControlPlane. Defaults to the provider's namespace.    |
+
+### ProviderConfig
+
+The `ProviderConfig` resource configures the versions of Argo CD that the service provider supports and their deployment artifacts.
+
+```yaml
+apiVersion: argocd.services.open-control-plane.io/v1alpha1
+kind: ProviderConfig
+metadata:
+  name: argocd
+spec:
+  # Optional: reconcile interval to prevent drift of managed resources.
+  pollInterval: 1m
+  versions:
+    - version: "v3.1.0"
+      chartVersion: "8.1.0"
+      # Optional: OCI registry URL of the Argo CD Helm chart.
+      chartUrl: "oci://ghcr.io/argoproj/argo-helm/argo-cd"
+      # Optional: Secret for a private chart registry (must exist in the controller namespace).
+      chartPullSecret: privateregcred
+      # Optional: custom Helm values passed to the managed HelmRelease.
+      values:
+        global:
+          image:
+            repository: quay.io/argoproj/argocd
+```
+
+| Field                             | Type     | Description                                                              |
+| --------------------------------- | -------- | ------------------------------------------------------------------------ |
+| `spec.pollInterval`               | duration | How often to reconcile managed resources to prevent drift (default: `1m`).|
+| `spec.versions`                   | array    | The Argo CD versions that can be installed.                              |
+| `spec.versions[].version`         | string   | Argo CD version that maps to `ArgoCD.spec.version`.                      |
+| `spec.versions[].chartVersion`    | string   | Helm chart version to install.                                          |
+| `spec.versions[].chartUrl`        | string   | OCI registry URL for the Helm chart.                                    |
+| `spec.versions[].chartPullSecret` | string   | Secret name for chart registry authentication.                          |
+| `spec.versions[].values`          | object   | Custom Helm values for the Argo CD deployment.                          |
+
+For private chart registries, set `spec.versions[].chartPullSecret` to a Secret in the controller namespace; it is referenced by the Flux `OCIRepository` to pull the chart. Image locations and image pull secrets can be adjusted via `spec.versions[].values`, which are passed directly to the managed `HelmRelease`.
+
+## Getting Started
+
+### Prerequisites
+
+- Go 1.21+
+- [Task](https://taskfile.dev/) (task runner)
+- Docker (for building images)
+- Access to an Open Control Plane environment
+
+### Running End-to-End Tests
+
+```bash
+task test-e2e
+```
+
+This uses the [openmcp-testing](https://github.com/openmcp-project/openmcp-testing) framework to spin up a full test environment.
+
+## Development Tasks
+
+| Command                     | Description                              |
+| --------------------------- | ---------------------------------------- |
+| `task build`                | Build the binary                         |
+| `task build:img:build-test` | Build the container image                |
+| `task test`                 | Run unit tests                           |
+| `task test-e2e`             | Run end-to-end tests                     |
+| `task generate`             | Generate CRDs and code after API changes |
+| `task validate`             | Run linters and formatters               |
+
+
 ## Quality Criteria
 
 <!-- Update the tier badge and tick each criterion as you implement it. See https://open-control-plane.io/developers/serviceprovider/quality-criteria for definitions. -->
@@ -20,86 +147,6 @@
 | Ownership and maintenance docs    |   ❌    |       |
 
 See the [OpenControlPlane Quality Criteria](https://open-control-plane.io/developers/serviceprovider/quality-criteria) for definitions.
-
-## About this project
-
-A template for building @openmcp-project Service Providers.
-
-## Requirements and Setup
-
-1. Create a new repository based on this template.
-2. Install opencontrolplane-gen.
-3. Run `task template:generate-provider` to generate your `ServiceProvider`.
-4. Implement your reconciler logic and run the e2e tests.
-
-Code generation is powered by [`opencontrolplane-gen`](https://github.com/openmcp-project/opencontrolplane-gen), which processes `//go:generate opencontrolplane-gen` directives in the source files. Placeholders (e.g. `Foo`, `foo`) are replaced based on environment variables set by the Task targets.
-
-## Template Taskfiles
-
-This template contains two Taskfiles:
-
-- Taskfile.yaml contains the tasks to use once you created a Service Provider based on this template.
-- Taskfile_template.yaml contains the tasks to use while working with the template. This Taskfile can be removed once you used this template to create a Service Provider.
-
-The following sections give a brief overview of the template specific tasks.
-
-### User tasks
-
-To generate a Service Provider, use `task template:generate-provider`:
-
-```shell
-task template:generate-provider api=YourKind name=yourname module=github.com/yourorg/yourrepo
-```
-
-The following options are available:
-
-| Variable          | Description                                       | Default                                               |
-|-------------------|---------------------------------------------------|-------------------------------------------------------|
-| `api`             | GVK kind name                                     | `Example`                                             |
-| `name`            | Service provider name (used in folder and tasks)  | `example`                                             |
-| `module`          | Go module path                                    | `github.com/openmcp-project/service-provider-example` |
-| `workloadcluster` | Run on a workload cluster                         | `false`                                               |
-| `secretwatcher`   | Include secret watcher implementation             | `false`                                               |
-| `samplecode`      | Include sample provider code                      | `false`                                               |
-| `dryrun`          | Preview the output without writing files          | `false`                                               |
-
-Then you can run the e2e test to verify that the template rendered a working Service Provider:
-
-```shell
-task test-e2e
-```
-
-For a detailed guide on setup and usage, please refer to the full [Service Provider Development Guide](https://openmcp-project.github.io/docs/developers/serviceprovider/service-providers).
-
-### Template Development
-
-The following tasks are useful to test any template code changes.
-
-- `template:dev:gen`: Executes the template with the default values to render "service-provider-example" for local development.
-- `template:dev:img`: Builds a container image for "service-provider-example". This also includes code validating.
-- `template:dev:e2e`: Executes e2e tests for "service-provider-example".
-
-All `template:dev` tasks support the following arguments:
-
-- `debug`: enables debug logs of [opencontrolplane-gen](https://github.com/openmcp-project/opencontrolplane-gen).
-- `workloadcluster`: Run on a workload cluster.
-- `secretwatcher`: Include secret watcher implementation.
-- `samplecode`: Include sample provider code.
-
-### Service Provider Runtime Flags
-
-The generated service provider supports the following runtime flags:
-
-- `--verbosity`: Logging verbosity level (see [controller-runtime logging](https://github.com/kubernetes-sigs/controller-runtime/blob/main/TMP-LOGGING.md))
-- `--environment`: Name of the environment (required for operation)
-- `--provider-name`: Name of the provider resource (required for operation)
-- `--metrics-bind-address`: Address for the metrics endpoint (default: `0`, use `:8443` for HTTPS or `:8080` for HTTP)
-- `--health-probe-bind-address`: Address for health probe endpoint (default: `:8081`)
-- `--leader-elect`: Enable leader election for controller manager (default: `false`)
-- `--metrics-secure`: Serve metrics endpoint securely via HTTPS (default: `true`)
-- `--enable-http2`: Enable HTTP/2 for metrics and webhook servers (default: `false`)
-
-For a complete list of available flags, run the generated binary with `-h` or `--help`.
 
 ## Support, Feedback, Contributing
 
