@@ -5,31 +5,21 @@ metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.22.0
   labels:
-    openmcp.cloud/cluster: onboarding
-  name: foos.foo.services.open-control-plane.io
+    openmcp.cloud/cluster: platform
+  name: providerconfigs.argocd.services.open-control-plane.io
 spec:
-  group: foo.services.open-control-plane.io
+  group: argocd.services.open-control-plane.io
   names:
-    kind: Foo
-    listKind: FooList
-    plural: foos
-    singular: foo
-  scope: Namespaced
+    kind: ProviderConfig
+    listKind: ProviderConfigList
+    plural: providerconfigs
+    singular: providerconfig
+  scope: Cluster
   versions:
-  - additionalPrinterColumns:
-    - jsonPath: .status.phase
-      name: Phase
-      type: string
-    - jsonPath: .metadata.creationTimestamp
-      name: Age
-      type: date
-    name: v1alpha1
+  - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: |-
-          opencontrolplane-gen:replace Foo=KIND foo=KIND_LOWER
-          Foo is the Schema for the foos API
-          opencontrolplane-gen:replace Foo=KIND
+        description: ProviderConfig is the Schema for the providerconfigs API
         properties:
           apiVersion:
             description: |-
@@ -49,26 +39,76 @@ spec:
           metadata:
             type: object
           spec:
-            description: |-
-              opencontrolplane-gen:replace Foo=KIND
-              spec defines the desired state of Foo
-              opencontrolplane-gen:replace Foo=KIND
+            description: spec defines the desired state of ProviderConfig
             properties:
-              foo:
-                description: |-
-                  opencontrolplane-gen:replace Foo=KIND
-                  foo is an example field of Foo. Edit api_types.go to remove/update
-                  opencontrolplane-gen:replace Foo=KIND
+              pollInterval:
+                default: 1m
+                description: PollInterval determines how often to reconcile resources
+                  to prevent drift.
+                format: duration
                 type: string
+              versions:
+                description: |-
+                  Versions specify the valid inputs for the ArgoCD.Spec.Version field.
+                  Each entry describes an installable ArgoCD version and its deployment
+                  artifacts (Helm chart coordinates and values).
+                items:
+                  description: ArgoCDVersion defines a version of ArgoCD that can
+                    be installed.
+                  properties:
+                    chartPullSecret:
+                      description: |-
+                        ChartPullSecret is the name of a Secret in the service provider's namespace
+                        containing credentials to pull the Helm chart from a private OCI registry.
+                        The secret must be of type kubernetes.io/dockerconfigjson.
+                      type: string
+                    chartUrl:
+                      default: oci://ghcr.io/argoproj/argo-helm/argo-cd
+                      description: ChartURL is the OCI registry URL for the ArgoCD
+                        Helm chart.
+                      type: string
+                    chartVersion:
+                      description: ChartVersion is the version of the Helm chart to
+                        install.
+                      type: string
+                    values:
+                      description: |-
+                        Values contains Helm values to override defaults for the ArgoCD deployment.
+                        This field supports all configuration options from the ArgoCD Helm chart.
+
+                        Image pull secrets for ArgoCD components should be specified via
+                        values.imagePullSecrets. Any secrets referenced there will be copied from
+                        the service provider's namespace to the ArgoCD namespace on the
+                        ManagedControlPlane.
+                      x-kubernetes-preserve-unknown-fields: true
+                    version:
+                      description: |-
+                        Version is the ArgoCD version to install.
+                        This value is compared with ArgoCD.Spec.Version to define the available
+                        versions and the deployment artifacts of a version.
+                      type: string
+                  required:
+                  - chartVersion
+                  - version
+                  type: object
+                type: array
+            required:
+            - versions
             type: object
           status:
-            description: |-
-              opencontrolplane-gen:replace Foo=KIND
-              status defines the observed state of Foo
-              opencontrolplane-gen:replace Foo=KIND
+            description: status defines the observed state of ProviderConfig
             properties:
               conditions:
-                description: Conditions contains the conditions.
+                description: |-
+                  Conditions represent the current state of the ProviderConfig resource.
+                  Each condition has a unique type and reflects the status of a specific aspect of the resource.
+
+                  Standard condition types include:
+                  - "Available": the resource is fully functional
+                  - "Progressing": the resource is being created or updated
+                  - "Degraded": the resource failed to reach or maintain its desired state
+
+                  The status of each condition is one of True, False, or Unknown.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -127,17 +167,6 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
-              observedGeneration:
-                description: ObservedGeneration is the generation of this resource
-                  that was last reconciled by the controller.
-                format: int64
-                type: integer
-              phase:
-                description: Phase is the current phase of the resource.
-                type: string
-            required:
-            - observedGeneration
-            - phase
             type: object
         required:
         - spec

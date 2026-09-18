@@ -36,4 +36,4 @@ jobs:
           go install github.com/openmcp-project/opencontrolplane-gen@v1.0.2
 
       - name: Running Test e2e
-        run: task template:dev:e2e workloadcluster=true secretwatcher=true samplecode=true
+        run: task test-e2e

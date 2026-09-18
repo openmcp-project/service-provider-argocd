@@ -14,7 +14,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-//go:generate opencontrolplane-gen
 package main
 
 import (
@@ -57,12 +56,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	// opencontrolplane-gen:replace github.com/openmcp-project/service-provider-template=MODULE
-	"github.com/openmcp-project/service-provider-template/internal/controller"
-	// opencontrolplane-gen:replace foo=KIND_LOWER github.com/openmcp-project/service-provider-template=MODULE
-	foosv1alpha1 "github.com/openmcp-project/service-provider-template/api/v1alpha1"
-	// opencontrolplane-gen:replace github.com/openmcp-project/service-provider-template=MODULE
-	"github.com/openmcp-project/service-provider-template/api/crds"
+	"github.com/openmcp-project/service-provider-argocd/api/crds"
+	argocdsv1alpha1 "github.com/openmcp-project/service-provider-argocd/api/v1alpha1"
+	"github.com/openmcp-project/service-provider-argocd/internal/controller"
+
+	helmv2 "github.com/fluxcd/helm-controller/api/v2"
+	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -70,10 +69,7 @@ var (
 	platformScheme   = runtime.NewScheme()
 	onboardingScheme = runtime.NewScheme()
 	mcpScheme        = runtime.NewScheme()
-	// opencontrolplane-gen:if WORKLOADCLUSTER=true
-	workloadScheme = runtime.NewScheme()
-	// opencontrolplane-gen:fi
-	setupLog = ctrl.Log.WithName("setup")
+	setupLog         = ctrl.Log.WithName("setup")
 )
 
 func init() {
@@ -81,38 +77,30 @@ func init() {
 	initPlatformScheme()
 	initOnboardingScheme()
 	initMcpScheme()
-	// opencontrolplane-gen:if WORKLOADCLUSTER=true
-	initWorkloadScheme()
-	// opencontrolplane-gen:fi
 }
 
 func initPlatformScheme() {
 	utilruntime.Must(clientgoscheme.AddToScheme(platformScheme))
 	utilruntime.Must(apiextensionv1.AddToScheme(platformScheme))
-	// opencontrolplane-gen:replace foo=KIND_LOWER
-	utilruntime.Must(foosv1alpha1.AddToScheme(platformScheme))
+	utilruntime.Must(argocdsv1alpha1.AddToScheme(platformScheme))
 	utilruntime.Must(clustersv1alpha1.AddToScheme(platformScheme))
 	utilruntime.Must(providerv1alpha1.AddToScheme(platformScheme))
+	// Flux resources are created on the platform cluster to drive the ArgoCD
+	// installation on the MCP.
+	utilruntime.Must(sourcev1.AddToScheme(platformScheme))
+	utilruntime.Must(helmv2.AddToScheme(platformScheme))
 }
 
 func initOnboardingScheme() {
 	utilruntime.Must(clientgoscheme.AddToScheme(onboardingScheme))
 	utilruntime.Must(apiextensionv1.AddToScheme(onboardingScheme))
-	// opencontrolplane-gen:replace foo=KIND_LOWER
-	utilruntime.Must(foosv1alpha1.AddToScheme(onboardingScheme))
+	utilruntime.Must(argocdsv1alpha1.AddToScheme(onboardingScheme))
 }
 
 func initMcpScheme() {
 	utilruntime.Must(clientgoscheme.AddToScheme(mcpScheme))
 	utilruntime.Must(apiextensionv1.AddToScheme(mcpScheme))
 }
-
-// opencontrolplane-gen:if WORKLOADCLUSTER=true
-func initWorkloadScheme() {
-	utilruntime.Must(clientgoscheme.AddToScheme(workloadScheme))
-}
-
-//opencontrolplane-gen:fi
 
 const (
 	debugEnvVar = "DEV_DEBUG"
@@ -245,8 +233,7 @@ func main() {
 		os.Exit(1)
 	}
 	clusterAccessManager := clusteraccess.NewClusterAccessManager(platformCluster.Client(),
-		// opencontrolplane-gen:replace foo=KIND_LOWER
-		foosv1alpha1.GroupVersion.Group, os.Getenv("POD_NAMESPACE"))
+		argocdsv1alpha1.GroupVersion.Group, podNamespace)
 	clusterAccessManager.WithLogger(&log).
 		WithInterval(10 * time.Second).
 		WithTimeout(30 * time.Minute)
@@ -280,12 +267,9 @@ func main() {
 		}
 
 		spGVK := metav1.GroupVersionKind{
-			// opencontrolplane-gen:replace foo=KIND_LOWER
-			Group: foosv1alpha1.GroupVersion.Group,
-			// opencontrolplane-gen:replace foo=KIND_LOWER
-			Version: foosv1alpha1.GroupVersion.Version,
-			// opencontrolplane-gen:replace Foo=KIND
-			Kind: "Foo",
+			Group:   argocdsv1alpha1.GroupVersion.Group,
+			Version: argocdsv1alpha1.GroupVersion.Version,
+			Kind:    "ArgoCD",
 		}
 		if err := utils.RegisterGVKsAtServiceProvider(ctx, platformCluster.Client(), providerName, spGVK); err != nil {
 			setupLog.Error(err, "Failed to register GVK at ServiceProvider")
@@ -299,8 +283,7 @@ func main() {
 		{
 			Rules: []rbacv1.PolicyRule{
 				{
-					// opencontrolplane-gen:replace foo=KIND_LOWER
-					APIGroups: []string{foosv1alpha1.GroupVersion.Group},
+					APIGroups: []string{argocdsv1alpha1.GroupVersion.Group},
 					Resources: []string{"*"},
 					Verbs:     []string{"*"},
 				},
@@ -319,8 +302,7 @@ func main() {
 		WebhookServer:          webhookServer,
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
-		// opencontrolplane-gen:replace github.com/openmcp-project/service-provider-template=MODULE
-		LeaderElectionID: "github.com/openmcp-project/service-provider-template",
+		LeaderElectionID:       "github.com/openmcp-project/service-provider-argocd",
 		// LeaderElectionReleaseOnCancel defines if the leader should step down voluntarily
 		// when the Manager ends. This requires the binary to immediately end when the
 		// Manager is stopped, otherwise, this setting is unsafe. Setting this significantly
@@ -377,44 +359,9 @@ func main() {
 		WithScheme(mcpScheme).
 		Build()
 
-	// opencontrolplane-gen:if WORKLOADCLUSTER=true
-	// TODO: define minimum set of permission the service provider requires on the workload cluster
-	workloadTokenAccessConfig := &clustersv1alpha1.TokenConfig{
-		Permissions: []clustersv1alpha1.PermissionsRequest{
-			{
-				Rules: []rbacv1.PolicyRule{
-					{
-						APIGroups: []string{"*"},
-						Resources: []string{"*"},
-						Verbs:     []string{"*"},
-					},
-				},
-			},
-		},
-		RoleRefs: []common.RoleRef{
-			{
-				Name: "cluster-admin",
-				Kind: "ClusterRole",
-			},
-		},
-	}
-	workloadClusterRequest := advanced.NewClusterRequest("workload", "wl", advanced.StaticClusterRequestSpecGenerator(&clustersv1alpha1.ClusterRequestSpec{
-		Purpose: clustersv1alpha1.PURPOSE_WORKLOAD,
-	})).
-		WithNamespaceGenerator(advanced.DefaultNamespaceGeneratorForMCP).
-		WithTokenAccess(workloadTokenAccessConfig).
-		WithScheme(workloadScheme).
-		Build()
-	// opencontrolplane-gen:fi
-
 	clusterAccessReconciler := advanced.NewClusterAccessReconciler(platformCluster.Client(), providerName)
 	if debugEnabled() {
-		// opencontrolplane-gen:if WORKLOADCLUSTER=true
-		clusterAccessReconciler = localaccess.NewLocalAdvancedClusterAccessReconciler(clusterAccessReconciler, localaccess.WithWorkloadCluster())
-		// opencontrolplane-gen:fi
-		// opencontrolplane-gen:if WORKLOADCLUSTER=false
 		clusterAccessReconciler = localaccess.NewLocalAdvancedClusterAccessReconciler(clusterAccessReconciler)
-		// opencontrolplane-gen:fi
 	}
 
 	clusterAccessReconciler.
@@ -426,24 +373,14 @@ func main() {
 			}
 		}).
 		Register(mcpClusterRequest).
-		// opencontrolplane-gen:if WORKLOADCLUSTER=true
-		Register(workloadClusterRequest).
-		// opencontrolplane-gen:fi
 		WithRetryInterval(10 * time.Second)
 
-	// opencontrolplane-gen:replace foo=KIND_LOWER Foo=KIND
-	spr := serviceprovider.NewAPIReconcilerBuilder[*foosv1alpha1.Foo, *foosv1alpha1.ProviderConfig]().
-		// opencontrolplane-gen:replace foo=KIND_LOWER Foo=KIND
-		EmptyObjectProvider(func() *foosv1alpha1.Foo { return &foosv1alpha1.Foo{} }).
-		// opencontrolplane-gen:replace foo=KIND_LOWER Foo=KIND
-		EmptyConfigProvider(func() *foosv1alpha1.ProviderConfig { return &foosv1alpha1.ProviderConfig{} }).
+	spr := serviceprovider.NewAPIReconcilerBuilder[*argocdsv1alpha1.ArgoCD, *argocdsv1alpha1.ProviderConfig]().
+		EmptyObjectProvider(func() *argocdsv1alpha1.ArgoCD { return &argocdsv1alpha1.ArgoCD{} }).
+		EmptyConfigProvider(func() *argocdsv1alpha1.ProviderConfig { return &argocdsv1alpha1.ProviderConfig{} }).
 		PlatformCluster(platformCluster).
 		OnboardingCluster(onboardingCluster).
-		// opencontrolplane-gen:if SECRETWATCHER=true
-		SecretNamespace(podNamespace).
-		// opencontrolplane-gen:fi
-		// opencontrolplane-gen:replace Foo=KIND
-		Reconciler(&controller.FooReconciler{
+		Reconciler(&controller.ArgoCDReconciler{
 			OnboardingCluster: onboardingCluster,
 			PlatformCluster:   platformCluster,
 			PodNamespace:      podNamespace,
@@ -451,8 +388,7 @@ func main() {
 		AdvancedClusterAccessReconciler(clusterAccessReconciler).
 		MustBuild()
 	if err := spr.SetupWithManager(mgr, providerName); err != nil {
-		// opencontrolplane-gen:replace foo=PROVIDER_NAME
-		setupLog.Error(err, "unable to create controller", "controller", "foo")
+		setupLog.Error(err, "unable to create controller", "controller", "argocd")
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder
@@ -501,9 +437,8 @@ func requestOnboardingClusterAccess(ctx context.Context, mgr clusteraccess.Manag
 func patchOnboardingClient(ctx context.Context, platformCluster *clusters.Cluster, onboardingCluster *clusters.Cluster, cmdSuffix string) (*clusters.Cluster, error) {
 	onboardingAr := &clustersv1alpha1.AccessRequest{
 		ObjectMeta: metav1.ObjectMeta{
-			// opencontrolplane-gen:replace foo=KIND_LOWER
-			Name:      clusteraccess.StableRequestNameFromLocalName(foosv1alpha1.GroupVersion.Group, cmdSuffix),
-			Namespace: os.Getenv("POD_NAMESPACE"),
+			Name:      clusteraccess.StableRequestNameFromLocalName(argocdsv1alpha1.GroupVersion.Group, cmdSuffix),
+			Namespace: os.Getenv(openmcpconst.EnvVariablePodNamespace),
 		},
 	}
 	if err := platformCluster.Client().Get(ctx, client.ObjectKeyFromObject(onboardingAr), onboardingAr); err != nil {

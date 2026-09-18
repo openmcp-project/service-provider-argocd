@@ -14,49 +14,46 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-//go:generate opencontrolplane-gen
 package controller
 
 import (
 	"context"
-
-	// opencontrolplane-gen:if SAMPLECODE=true
 	"fmt"
 	"time"
 
-	// opencontrolplane-gen:fi
-	// opencontrolplane-gen:if SECRETWATCHER=true
-	corev1 "k8s.io/api/core/v1"
-	// opencontrolplane-gen:fi
-
-	ctrl "sigs.k8s.io/controller-runtime"
-	// opencontrolplane-gen:if SAMPLECODE=true
-	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
-	"sigs.k8s.io/controller-runtime/pkg/client"
+	ctrl "sigs.k8s.io/controller-runtime"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	// opencontrolplane-gen:fi
 	"github.com/openmcp-project/controller-utils/pkg/clusters"
-	// opencontrolplane-gen:if SAMPLECODE=true
 	"github.com/openmcp-project/opencontrolplane-runtime/pkg/serviceprovider"
-	// opencontrolplane-gen:fi
 	clusteraccess "github.com/openmcp-project/opencontrolplane-runtime/pkg/serviceprovider/clusteraccess"
+	libutils "github.com/openmcp-project/openmcp-operator/lib/utils"
 
-	// opencontrolplane-gen:replace github.com/openmcp-project/service-provider-template=MODULE
-	apiv1alpha1 "github.com/openmcp-project/service-provider-template/api/v1alpha1"
+	apiv1alpha1 "github.com/openmcp-project/service-provider-argocd/api/v1alpha1"
+	"github.com/openmcp-project/service-provider-argocd/internal/argocd"
 )
 
-// opencontrolplane-gen:replace Foo=KIND
-// FooReconciler reconciles a Foo object
-// opencontrolplane-gen:replace Foo=KIND
-type FooReconciler struct {
-	// opencontrolplane-gen:replace Foo=KIND
-	// OnboardingCluster is the cluster where this controller watches Foo resources and reacts to their changes.
+// Condition reasons surfaced on the ArgoCD resource status.
+const (
+	reasonReconciling     = "Reconciling"
+	reasonInvalidVersion  = "InvalidVersion"
+	reasonInstallFailed   = "InstallFailed"
+	reasonUninstalling    = "Uninstalling"
+	reasonDeletionBlocked = "UserResourcesPresent"
+
+	conditionDeletionBlocked = "DeletionBlocked"
+
+	// requeueInterval is how long to wait before re-checking asynchronous
+	// progress (e.g. namespace teardown or blocked deletion).
+	requeueInterval = 10 * time.Second
+)
+
+// ArgoCDReconciler reconciles an ArgoCD object by provisioning ArgoCD onto the
+// requesting Managed Control Plane.
+type ArgoCDReconciler struct {
+	// OnboardingCluster is the cluster where this controller watches ArgoCD resources and reacts to their changes.
 	OnboardingCluster *clusters.Cluster
 	// PlatformCluster is the cluster where this controller is deployed and configured.
 	PlatformCluster *clusters.Cluster
@@ -64,145 +61,123 @@ type FooReconciler struct {
 	PodNamespace string
 }
 
-// CreateOrUpdate is called on every add or update event
-// opencontrolplane-gen:replace Foo=KIND
-func (r *FooReconciler) CreateOrUpdate(ctx context.Context, svcobj *apiv1alpha1.Foo, _ *apiv1alpha1.ProviderConfig, clusters clusteraccess.ClusterContext) (ctrl.Result, error) {
-	// opencontrolplane-gen:if SAMPLECODE=true
-	l := logf.FromContext(ctx)
-	serviceprovider.StatusProgressing(svcobj, "Reconciling", "Reconcile in progress")
-	managedObj := &apiextensionsv1.CustomResourceDefinition{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "foos.example.domain",
-		},
+// CreateOrUpdate provisions (or converges) ArgoCD for the given resource. It is
+// invoked on every add or update event.
+func (r *ArgoCDReconciler) CreateOrUpdate(ctx context.Context, obj *apiv1alpha1.ArgoCD, pc *apiv1alpha1.ProviderConfig, clusterCtx clusteraccess.ClusterContext) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+	serviceprovider.StatusProgressing(obj, reasonReconciling, "Reconcile in progress")
+
+	version, ok := pc.SelectVersion(obj.Spec.Version)
+	if !ok {
+		// Invalid user input: report it but do not requeue with an error, since
+		// retrying without a spec change would be futile.
+		msg := fmt.Sprintf("requested version %q is not offered by the provider configuration", obj.Spec.Version)
+		log.Info("rejecting ArgoCD request", "reason", msg)
+		serviceprovider.StatusProgressing(obj, reasonInvalidVersion, msg)
+		return ctrl.Result{}, nil
 	}
-	if _, err := ctrl.CreateOrUpdate(ctx, clusters.MCPCluster.Client(), managedObj, func() error {
-		managedObj.Spec = fooCRD().Spec
-		return nil
-	}); err != nil {
-		l.Error(err, "createOrUpdate failed")
+
+	provisioner, err := r.newProvisioner(obj, pc, clusterCtx)
+	if err != nil {
 		return ctrl.Result{}, err
 	}
-	serviceprovider.StatusReady(svcobj)
-	// opencontrolplane-gen:fi
-	// opencontrolplane-gen:if SAMPLECODE=false
-	// TODO
-	_, _, _ = ctx, svcobj, clusters
-	// opencontrolplane-gen:fi
+
+	if err := provisioner.Install(ctx, version); err != nil {
+		log.Error(err, "failed to declare ArgoCD installation")
+		serviceprovider.StatusProgressing(obj, reasonInstallFailed, err.Error())
+		return ctrl.Result{}, err
+	}
+
+	ready, message, err := provisioner.Ready(ctx)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if !ready {
+		serviceprovider.StatusProgressing(obj, reasonReconciling, message)
+		return ctrl.Result{RequeueAfter: requeueInterval}, nil
+	}
+
+	serviceprovider.StatusReady(obj)
 	return ctrl.Result{}, nil
 }
 
-// Delete is called on every delete event
-// opencontrolplane-gen:replace Foo=KIND
-func (r *FooReconciler) Delete(ctx context.Context, obj *apiv1alpha1.Foo, _ *apiv1alpha1.ProviderConfig, clusters clusteraccess.ClusterContext) (ctrl.Result, error) {
-	// opencontrolplane-gen:if SAMPLECODE=true
-	l := logf.FromContext(ctx)
+// Delete tears down ArgoCD for the given resource. It is invoked on every
+// delete event and blocks while user-owned Applications still exist to avoid
+// orphaning workloads.
+func (r *ArgoCDReconciler) Delete(ctx context.Context, obj *apiv1alpha1.ArgoCD, pc *apiv1alpha1.ProviderConfig, clusterCtx clusteraccess.ClusterContext) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
 	serviceprovider.StatusTerminating(obj)
-	managedObj := fooCRD()
-	// Check if no custom resource objects related to the managed domain service CRD remain on a ControlPlane before deleting the service provider
-	fooList := &unstructured.UnstructuredList{}
-	fooList.SetGroupVersionKind(schema.GroupVersionKind{
-		Group:   managedObj.Spec.Group,
-		Version: managedObj.Spec.Versions[0].Name,
-		Kind:    managedObj.Spec.Names.ListKind,
-	})
-	if err := clusters.MCPCluster.Client().List(ctx, fooList); err != nil {
-		if !meta.IsNoMatchError(err) {
-			l.Error(err, "list Foo resources failed")
-			return ctrl.Result{}, err
-		}
+
+	provisioner, err := r.newProvisioner(obj, pc, clusterCtx)
+	if err != nil {
+		return ctrl.Result{}, err
 	}
-	if len(fooList.Items) != 0 {
+
+	// Guard: refuse to delete while the user still has Applications.
+	applications, err := provisioner.CountUserApplications(ctx)
+	if err != nil {
+		log.Error(err, "failed to list ArgoCD Applications")
+		return ctrl.Result{}, err
+	}
+	if applications > 0 {
 		meta.SetStatusCondition(obj.GetConditions(), metav1.Condition{
-			Type:               "DeletionBlocked",
+			Type:               conditionDeletionBlocked,
 			Status:             metav1.ConditionTrue,
 			ObservedGeneration: obj.GetGeneration(),
-			Reason:             "UserResourcesPresent",
-			Message:            fmt.Sprintf("user resources still present, kind %s: %d", managedObj.Spec.Names.Kind, len(fooList.Items)),
+			Reason:             reasonDeletionBlocked,
+			Message:            fmt.Sprintf("deletion blocked: %d ArgoCD Application(s) still present", applications),
 		})
 		obj.SetObservedGeneration(obj.GetGeneration())
 		obj.SetPhase("Terminating")
-
-		return ctrl.Result{
-			RequeueAfter: time.Second * 10,
-		}, nil
+		return ctrl.Result{RequeueAfter: requeueInterval}, nil
 	}
-	if err := clusters.MCPCluster.Client().Delete(ctx, managedObj); client.IgnoreNotFound(err) != nil {
-		l.Error(err, "delete object failed")
+
+	if err := provisioner.Uninstall(ctx); err != nil {
+		log.Error(err, "failed to uninstall ArgoCD")
+		serviceprovider.StatusTerminatingWithReason(obj, reasonUninstalling, err.Error())
 		return ctrl.Result{}, err
 	}
-	if err := clusters.MCPCluster.Client().Get(ctx, client.ObjectKeyFromObject(managedObj), managedObj); err != nil {
-		return reconcile.Result{}, client.IgnoreNotFound(err)
+
+	uninstalled, err := provisioner.IsUninstalled(ctx)
+	if err != nil {
+		return ctrl.Result{}, err
 	}
-	// object still exists
-	// opencontrolplane-gen:fi
-	// opencontrolplane-gen:if SAMPLECODE=false
-	// TODO
-	_, _, _ = ctx, obj, clusters
-	// opencontrolplane-gen:fi
-	return ctrl.Result{
-		// opencontrolplane-gen:if SAMPLECODE=true
-		RequeueAfter: time.Second * 10,
-		// opencontrolplane-gen:fi
-	}, nil
+	if !uninstalled {
+		return ctrl.Result{RequeueAfter: requeueInterval}, nil
+	}
+
+	return ctrl.Result{}, nil
 }
 
-// opencontrolplane-gen:if SECRETWATCHER=true
-// IsReferencedSecret returns true if the given secret should trigger
-// reconciliation. See serviceprovider.SecretWatcher for details.
-//
-// revive:disable:unused-parameter
-// opencontrolplane-gen:replace Foo=KIND
-func (r *FooReconciler) IsReferencedSecret(ctx context.Context, secret *corev1.Secret, pc *apiv1alpha1.ProviderConfig) bool {
-	if pc == nil {
-		return false
+// newProvisioner builds a Provisioner for the given reconcile request. The Flux
+// resources live in the MCP's tenant namespace on the platform cluster, next to
+// the MCP kubeconfig secret that the HelmRelease references.
+func (r *ArgoCDReconciler) newProvisioner(obj *apiv1alpha1.ArgoCD, pc *apiv1alpha1.ProviderConfig, clusterCtx clusteraccess.ClusterContext) (*argocd.Provisioner, error) {
+	tenantNamespace := clusterCtx.MCPAccessSecretKey.Namespace
+	if tenantNamespace == "" {
+		// Fall back to a stable, deterministic namespace derived from the request.
+		ns, err := libutils.StableMCPNamespace(obj.Name, obj.Namespace)
+		if err != nil {
+			return nil, fmt.Errorf("determining tenant namespace: %w", err)
+		}
+		tenantNamespace = ns
 	}
-	// TODO: Check if the secret is referenced in the provider config, for example:
-	// for _, ref := range pc.Spec.ImagePullSecrets {
-	//     if ref.Name == secret.Name {
-	//         return true
-	//     }
-	// }
-	return false
+
+	return argocd.NewProvisioner(argocd.ProvisionerConfig{
+		PlatformClient:       r.PlatformCluster.Client(),
+		MCPClient:            clusterCtx.MCPCluster.Client(),
+		TenantNamespace:      tenantNamespace,
+		MCPNamespace:         providerNamespace(obj),
+		KubeConfigSecretName: clusterCtx.MCPAccessSecretKey.Name,
+		PollInterval:         pc.PollInterval(),
+	}), nil
 }
 
-// opencontrolplane-gen:fi
-// opencontrolplane-gen:if SAMPLECODE=true
-func fooCRD() *apiextensionsv1.CustomResourceDefinition {
-	return &apiextensionsv1.CustomResourceDefinition{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "foos.example.domain",
-		},
-		Spec: apiextensionsv1.CustomResourceDefinitionSpec{
-			Group: "example.domain",
-			Versions: []apiextensionsv1.CustomResourceDefinitionVersion{
-				{
-					Name:    "v1alpha1",
-					Served:  true,
-					Storage: true,
-					Schema: &apiextensionsv1.CustomResourceValidation{
-						OpenAPIV3Schema: &apiextensionsv1.JSONSchemaProps{
-							Type: "object",
-							Properties: map[string]apiextensionsv1.JSONSchemaProps{
-								"spec": {
-									Type: "object",
-									Properties: map[string]apiextensionsv1.JSONSchemaProps{
-										"foo": {Type: "string"},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-			Scope: apiextensionsv1.NamespaceScoped,
-			Names: apiextensionsv1.CustomResourceDefinitionNames{
-				Plural:   "foos",
-				Singular: "foo",
-				Kind:     "Foo",
-				ListKind: "FooList",
-			},
-		},
+// providerNamespace resolves the target MCP namespace from the ArgoCD object,
+// tolerating a nil config.
+func providerNamespace(obj *apiv1alpha1.ArgoCD) string {
+	if obj == nil {
+		return ""
 	}
+	return obj.Spec.NamespaceOverride
 }
-
-// opencontrolplane-gen:fi

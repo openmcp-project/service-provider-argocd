@@ -6,25 +6,25 @@ cliVersion: 4.8.0
 domain: open-control-plane.io
 layout:
 - go.kubebuilder.io/v4
-projectName: sp-template
-repo: github.com/openmcp-project/service-provider-template
+projectName: sp-argocd
+repo: github.com/openmcp-project/service-provider-argocd
 resources:
 - api:
     crdVersion: v1
     namespaced: true
   controller: true
   domain: open-control-plane.io
-  group: foo.services
-  kind: FooService
-  path: github.com/openmcp-project/service-provider-template/api/v1alpha1
+  group: argocd.services
+  kind: ArgoCD
+  path: github.com/openmcp-project/service-provider-argocd/api/v1alpha1
   version: v1alpha1
 - api:
     crdVersion: v1
     namespaced: true
   controller: true
   domain: open-control-plane.io
-  group: foo.services
+  group: argocd.services
   kind: ProviderConfig
-  path: github.com/openmcp-project/service-provider-template/api/v1alpha1
+  path: github.com/openmcp-project/service-provider-argocd/api/v1alpha1
   version: v1alpha1
 version: "3"
