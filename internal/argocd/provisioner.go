@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	apiv1alpha1 "github.com/openmcp-project/service-provider-argocd/api/v1alpha1"
 )
@@ -38,6 +39,12 @@ type Provisioner struct {
 	kubeConfigSecretName string
 	// pollInterval controls how often Flux reconciles the resources.
 	pollInterval time.Duration
+	// exposure holds the resolved external-access intent for the ArgoCD server.
+	exposure ExposureValues
+	// reloader, when non-nil, installs the Stakater Reloader addon alongside
+	// ArgoCD. Reloader is best-effort: its failures are logged but never
+	// returned as Install errors.
+	reloader *apiv1alpha1.ReloaderConfig
 }
 
 // ProvisionerConfig groups the inputs required to build a Provisioner.
@@ -48,6 +55,8 @@ type ProvisionerConfig struct {
 	MCPNamespace         string
 	KubeConfigSecretName string
 	PollInterval         time.Duration
+	Exposure             ExposureValues
+	Reloader             *apiv1alpha1.ReloaderConfig
 }
 
 // NewProvisioner constructs a Provisioner, applying the default target
@@ -63,6 +72,8 @@ func NewProvisioner(cfg ProvisionerConfig) *Provisioner {
 		mcpNamespace:         cfg.MCPNamespace,
 		kubeConfigSecretName: cfg.KubeConfigSecretName,
 		pollInterval:         cfg.PollInterval,
+		exposure:             cfg.Exposure,
+		reloader:             cfg.Reloader,
 	}
 }
 
@@ -79,7 +90,39 @@ func (p *Provisioner) Install(ctx context.Context, version apiv1alpha1.ArgoCDVer
 	if err := p.applyHelmRelease(ctx, version); err != nil {
 		return fmt.Errorf("reconciling HelmRelease: %w", err)
 	}
+
+	p.reconcileReloader(ctx)
 	return nil
+}
+
+// reconcileReloader applies or removes the Reloader addon resources. It is
+// intentionally fire-and-forget: any error is logged and swallowed so that
+// Reloader health never bubbles up to the ArgoCD CR reconciliation loop.
+func (p *Provisioner) reconcileReloader(ctx context.Context) {
+	log := logf.FromContext(ctx)
+	if p.reloader != nil {
+		if err := p.applyReloaderOCIRepository(ctx); err != nil {
+			log.Error(err, "failed to reconcile Reloader OCIRepository; addon will not be updated this cycle")
+		}
+		if err := p.applyReloaderHelmRelease(ctx); err != nil {
+			log.Error(err, "failed to reconcile Reloader HelmRelease; addon will not be updated this cycle")
+		}
+		return
+	}
+	// Reloader disabled — clean up any resources left from a previous config so
+	// they do not run unmanaged on the MCP.
+	reloaderHR := &helmv2.HelmRelease{
+		ObjectMeta: metav1.ObjectMeta{Name: reloaderHelmReleaseName, Namespace: p.tenantNamespace},
+	}
+	if err := p.platformClient.Delete(ctx, reloaderHR); client.IgnoreNotFound(err) != nil {
+		log.Error(err, "failed to remove orphaned Reloader HelmRelease")
+	}
+	reloaderRepo := &sourcev1.OCIRepository{
+		ObjectMeta: metav1.ObjectMeta{Name: reloaderOCIRepositoryName, Namespace: p.tenantNamespace},
+	}
+	if err := p.platformClient.Delete(ctx, reloaderRepo); client.IgnoreNotFound(err) != nil {
+		log.Error(err, "failed to remove orphaned Reloader OCIRepository")
+	}
 }
 
 // Ready reports whether the HelmRelease has reached its Ready condition, which
@@ -113,23 +156,47 @@ func (p *Provisioner) Uninstall(ctx context.Context) error {
 	if err := p.platformClient.Delete(ctx, repo); client.IgnoreNotFound(err) != nil {
 		return fmt.Errorf("deleting OCIRepository: %w", err)
 	}
+
+	reloaderHR := &helmv2.HelmRelease{
+		ObjectMeta: metav1.ObjectMeta{Name: reloaderHelmReleaseName, Namespace: p.tenantNamespace},
+	}
+	if err := p.platformClient.Delete(ctx, reloaderHR); client.IgnoreNotFound(err) != nil {
+		return fmt.Errorf("deleting Reloader HelmRelease: %w", err)
+	}
+
+	reloaderRepo := &sourcev1.OCIRepository{
+		ObjectMeta: metav1.ObjectMeta{Name: reloaderOCIRepositoryName, Namespace: p.tenantNamespace},
+	}
+	if err := p.platformClient.Delete(ctx, reloaderRepo); client.IgnoreNotFound(err) != nil {
+		return fmt.Errorf("deleting Reloader OCIRepository: %w", err)
+	}
 	return nil
 }
 
-// IsUninstalled reports whether the HelmRelease has been fully removed from the
-// platform cluster, signalling that teardown has completed.
+// IsUninstalled reports whether all managed Flux resources have been fully
+// removed from the platform cluster. Both the ArgoCD and Reloader HelmReleases
+// must be gone before the ArgoCD CR finalizer is released, so neither Helm
+// release is orphaned on the MCP.
 func (p *Provisioner) IsUninstalled(ctx context.Context) (bool, error) {
 	hr := &helmv2.HelmRelease{}
-	key := client.ObjectKey{Name: helmReleaseName, Namespace: p.tenantNamespace}
-	err := p.platformClient.Get(ctx, key, hr)
+	err := p.platformClient.Get(ctx, client.ObjectKey{Name: helmReleaseName, Namespace: p.tenantNamespace}, hr)
 	switch {
-	case apierrors.IsNotFound(err):
-		return true, nil
-	case err != nil:
-		return false, fmt.Errorf("getting HelmRelease: %w", err)
-	default:
+	case err == nil:
 		return false, nil
+	case !apierrors.IsNotFound(err):
+		return false, fmt.Errorf("getting HelmRelease: %w", err)
 	}
+
+	reloaderHR := &helmv2.HelmRelease{}
+	err = p.platformClient.Get(ctx, client.ObjectKey{Name: reloaderHelmReleaseName, Namespace: p.tenantNamespace}, reloaderHR)
+	switch {
+	case err == nil:
+		return false, nil
+	case !apierrors.IsNotFound(err):
+		return false, fmt.Errorf("getting Reloader HelmRelease: %w", err)
+	}
+
+	return true, nil
 }
 
 // CountUserApplications returns the number of ArgoCD Application resources still
@@ -177,7 +244,12 @@ func (p *Provisioner) applyHelmRelease(ctx context.Context, version apiv1alpha1.
 	hr := &helmv2.HelmRelease{
 		ObjectMeta: metav1.ObjectMeta{Name: helmReleaseName, Namespace: p.tenantNamespace},
 	}
-	_, err := controllerutil.CreateOrUpdate(ctx, p.platformClient, hr, func() error {
+	values, err := buildValues(version.Values, p.exposure)
+	if err != nil {
+		return fmt.Errorf("building Helm values: %w", err)
+	}
+
+	_, err = controllerutil.CreateOrUpdate(ctx, p.platformClient, hr, func() error {
 		setManagedBy(hr)
 		hr.Spec = helmv2.HelmReleaseSpec{
 			Interval: metav1.Duration{Duration: p.pollInterval},
@@ -206,7 +278,7 @@ func (p *Provisioner) applyHelmRelease(ctx context.Context, version apiv1alpha1.
 				Timeout:     &metav1.Duration{Duration: 5 * time.Minute},
 			},
 			DriftDetection:   &helmv2.DriftDetection{Mode: helmv2.DriftDetectionEnabled},
-			Values:           version.Values,
+			Values:           values,
 			TargetNamespace:  p.mcpNamespace,
 			StorageNamespace: p.mcpNamespace,
 		}
@@ -215,12 +287,94 @@ func (p *Provisioner) applyHelmRelease(ctx context.Context, version apiv1alpha1.
 	return err
 }
 
-// setManagedBy stamps the provider ownership label onto an object.
+// applyReloaderOCIRepository creates or updates the OCIRepository for the
+// Stakater Reloader Helm chart. It uses managedByReloaderValue so the
+// framework's HelmRelease watch does not see this resource.
+func (p *Provisioner) applyReloaderOCIRepository(ctx context.Context) error {
+	repo := &sourcev1.OCIRepository{
+		ObjectMeta: metav1.ObjectMeta{Name: reloaderOCIRepositoryName, Namespace: p.tenantNamespace},
+	}
+	_, err := controllerutil.CreateOrUpdate(ctx, p.platformClient, repo, func() error {
+		setReloaderManagedBy(repo)
+		repo.Spec = sourcev1.OCIRepositorySpec{
+			Interval: metav1.Duration{Duration: p.pollInterval},
+			URL:      p.reloader.ChartURL,
+			Reference: &sourcev1.OCIRepositoryRef{
+				Tag: p.reloader.ChartVersion,
+			},
+		}
+		if p.reloader.ChartPullSecret != "" {
+			repo.Spec.SecretRef = &fluxmeta.LocalObjectReference{Name: p.reloader.ChartPullSecret}
+		}
+		return nil
+	})
+	return err
+}
+
+// applyReloaderHelmRelease creates or updates the HelmRelease that installs
+// the Reloader chart onto the MCP in the same namespace as ArgoCD. It uses
+// managedByReloaderValue so the framework's HelmRelease watch does not see
+// this resource and cannot cascade Reloader failures to the ArgoCD CR.
+func (p *Provisioner) applyReloaderHelmRelease(ctx context.Context) error {
+	hr := &helmv2.HelmRelease{
+		ObjectMeta: metav1.ObjectMeta{Name: reloaderHelmReleaseName, Namespace: p.tenantNamespace},
+	}
+	_, err := controllerutil.CreateOrUpdate(ctx, p.platformClient, hr, func() error {
+		setReloaderManagedBy(hr)
+		hr.Spec = helmv2.HelmReleaseSpec{
+			Interval: metav1.Duration{Duration: p.pollInterval},
+			ChartRef: &helmv2.CrossNamespaceSourceReference{
+				Kind:      "OCIRepository",
+				Name:      reloaderOCIRepositoryName,
+				Namespace: p.tenantNamespace,
+			},
+			KubeConfig: &fluxmeta.KubeConfigReference{
+				SecretRef: &fluxmeta.SecretKeyReference{
+					Name: p.kubeConfigSecretName,
+					Key:  kubeConfigSecretKey,
+				},
+			},
+			Install: &helmv2.Install{
+				CreateNamespace: false,
+				Remediation:     &helmv2.InstallRemediation{Retries: 3},
+			},
+			Upgrade: &helmv2.Upgrade{
+				Remediation: &helmv2.UpgradeRemediation{Retries: 3},
+			},
+			Uninstall: &helmv2.Uninstall{
+				KeepHistory: false,
+				Timeout:     &metav1.Duration{Duration: 5 * time.Minute},
+			},
+			DriftDetection:   &helmv2.DriftDetection{Mode: helmv2.DriftDetectionEnabled},
+			Values:           p.reloader.Values,
+			TargetNamespace:  p.mcpNamespace,
+			StorageNamespace: p.mcpNamespace,
+		}
+		return nil
+	})
+	return err
+}
+
+// setManagedBy stamps the provider ownership label onto ArgoCD core resources.
+// The framework watches resources with this label; a HelmRelease with this
+// label entering Failed state will cause the framework to delete the ArgoCD CR.
 func setManagedBy(obj client.Object) {
 	labels := obj.GetLabels()
 	if labels == nil {
 		labels = map[string]string{}
 	}
 	labels[managedByLabel] = managedByValue
+	obj.SetLabels(labels)
+}
+
+// setReloaderManagedBy stamps a distinct label onto Reloader addon resources.
+// The different value ensures the framework's watch never sees Reloader
+// HelmRelease failures and never cascades them into ArgoCD CR deletion.
+func setReloaderManagedBy(obj client.Object) {
+	labels := obj.GetLabels()
+	if labels == nil {
+		labels = map[string]string{}
+	}
+	labels[managedByLabel] = managedByReloaderValue
 	obj.SetLabels(labels)
 }

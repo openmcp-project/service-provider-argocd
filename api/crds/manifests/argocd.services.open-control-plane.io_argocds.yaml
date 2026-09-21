@@ -20,6 +20,9 @@ spec:
     - jsonPath: .status.phase
       name: Phase
       type: string
+    - jsonPath: .status.endpoint
+      name: Endpoint
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -48,6 +51,30 @@ spec:
           spec:
             description: spec defines the desired state of ArgoCD
             properties:
+              exposure:
+                description: |-
+                  Exposure configures external access to the ArgoCD server UI/API. When left
+                  unset, ArgoCD is only reachable in-cluster.
+                properties:
+                  allowedIPs:
+                    description: |-
+                      AllowedIPs optionally restricts access to the LoadBalancer to the given
+                      CIDR ranges. When empty, the LoadBalancer accepts traffic from any source.
+                    items:
+                      type: string
+                    type: array
+                  host:
+                    description: |-
+                      Host is the sub-domain label (for example "argocd") or a fully-qualified
+                      domain name under which the ArgoCD server will be reachable. A bare label
+                      is completed with the shoot's root domain, derived from the MCP apiserver
+                      host. Each DNS label is limited to 63 characters.
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                required:
+                - host
+                type: object
               namespaceOverride:
                 description: |-
                   namespaceOverride overrides the default namespace into which ArgoCD is
@@ -126,6 +153,12 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              endpoint:
+                description: |-
+                  Endpoint is the externally reachable URL of the ArgoCD server once exposure
+                  has been provisioned. It is empty when exposure is disabled or not yet
+                  ready.
+                type: string
               observedGeneration:
                 description: ObservedGeneration is the generation of this resource
                   that was last reconciled by the controller.
