@@ -14,12 +14,13 @@ import (
 // TTL, certificate purpose). It is the single input to the Gardener values
 // fragment, which keeps the rendering logic pure and unit-testable.
 type ExposureValues struct {
-	Enabled     bool
-	Host        string
-	AllowedIPs  []string
-	DNSClass    string
-	DNSTTL      int
-	CertPurpose string
+	Enabled         bool
+	Host            string
+	AllowedIPs      []string
+	DNSClass        string
+	DNSTTL          int
+	CertPurpose     string
+	ReloaderEnabled bool
 }
 
 // buildValues merges the operator-supplied chart values with the exposure
@@ -75,18 +76,23 @@ func exposureFragment(e ExposureValues) map[string]any {
 		service["loadBalancerSourceRanges"] = toAnySlice(e.AllowedIPs)
 	}
 
+	server := map[string]any{
+		"service": service,
+	}
+	// Only wire the Reloader restart annotation when Reloader is actually
+	// installed. Otherwise it is inert and would hide the fact that a rotated
+	// TLS certificate is not picked up until argocd-server is restarted.
+	if e.ReloaderEnabled {
+		server["deploymentAnnotations"] = map[string]any{
+			"secret.reloader.stakater.com/reload": strings.Join([]string{
+				"argocd-secret",
+				serverTLSSecretName,
+			}, ", "),
+		}
+	}
+
 	return map[string]any{
-		"server": map[string]any{
-			"service": service,
-			// Restart argocd-server when the managed TLS secret rotates so the
-			// renewed certificate is picked up without manual intervention.
-			"deploymentAnnotations": map[string]any{
-				"secret.reloader.stakater.com/reload": strings.Join([]string{
-					"argocd-secret",
-					serverTLSSecretName,
-				}, ", "),
-			},
-		},
+		"server": server,
 		// Ensure ArgoCD emits correct absolute URLs (redirects, OIDC callbacks).
 		"configs": map[string]any{
 			"cm": map[string]any{

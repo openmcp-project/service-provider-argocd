@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/url"
 	"regexp"
 	"strings"
@@ -94,6 +95,14 @@ func (r *ArgoCDReconciler) CreateOrUpdate(ctx context.Context, obj *apiv1alpha1.
 		return ctrl.Result{}, nil
 	}
 
+	if obj.Spec.Exposure != nil {
+		if _, ok := pc.ReloaderConfig(); !ok {
+			log.Info("exposure requested but Reloader is not enabled in the ProviderConfig; "+
+				"argocd-server will not auto-restart when its managed TLS certificate rotates",
+				"host", obj.Spec.Exposure.Host)
+		}
+	}
+
 	provisioner, err := r.newProvisioner(obj, pc, clusterCtx)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -120,11 +129,14 @@ func (r *ArgoCDReconciler) CreateOrUpdate(ctx context.Context, obj *apiv1alpha1.
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	obj.Status.Endpoint = endpoint
 	if !endpointReady {
+		// Do not publish the endpoint until it is actually reachable, per the
+		// status.endpoint contract.
+		obj.Status.Endpoint = ""
 		serviceprovider.StatusProgressing(obj, reasonEndpointPending, "waiting for LoadBalancer address and managed TLS certificate")
 		return ctrl.Result{RequeueAfter: requeueInterval}, nil
 	}
+	obj.Status.Endpoint = endpoint
 
 	serviceprovider.StatusReady(obj)
 	return ctrl.Result{}, nil
@@ -244,6 +256,13 @@ func validateExposure(obj *apiv1alpha1.ArgoCD, mcpAPIServerHost string) error {
 	if !hostPattern.MatchString(e.Host) {
 		return fmt.Errorf("spec.exposure.host %q is not a valid DNS name: each label must be 1-63 characters, start and end with an alphanumeric, and contain only letters, digits or hyphens", e.Host)
 	}
+
+	for _, cidr := range e.AllowedIPs {
+		if _, _, err := net.ParseCIDR(strings.TrimSpace(cidr)); err != nil {
+			return fmt.Errorf("spec.exposure.allowedIPs entry %q is not a valid CIDR range (for example 203.0.113.0/24 or 203.0.113.5/32): %w", cidr, err)
+		}
+	}
+
 	fqdn, err := composeHost(e.Host, mcpAPIServerHost)
 	if err != nil {
 		return err
@@ -297,17 +316,19 @@ func resolveExposure(obj *apiv1alpha1.ArgoCD, pc *apiv1alpha1.ProviderConfig, mc
 		return argocd.ExposureValues{}
 	}
 	policy := pc.ExposurePolicy()
+	_, reloaderEnabled := pc.ReloaderConfig()
 	host, err := composeHost(e.Host, mcpAPIServerHost)
 	if err != nil {
 		host = e.Host
 	}
 	return argocd.ExposureValues{
-		Enabled:     true,
-		Host:        host,
-		AllowedIPs:  e.AllowedIPs,
-		DNSClass:    policy.DNSClass,
-		DNSTTL:      policy.DNSTTL,
-		CertPurpose: policy.CertPurpose,
+		Enabled:         true,
+		Host:            host,
+		AllowedIPs:      e.AllowedIPs,
+		DNSClass:        policy.DNSClass,
+		DNSTTL:          policy.DNSTTL,
+		CertPurpose:     policy.CertPurpose,
+		ReloaderEnabled: reloaderEnabled,
 	}
 }
 
