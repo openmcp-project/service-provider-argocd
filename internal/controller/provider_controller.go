@@ -95,13 +95,7 @@ func (r *ArgoCDReconciler) CreateOrUpdate(ctx context.Context, obj *apiv1alpha1.
 		return ctrl.Result{}, nil
 	}
 
-	if obj.Spec.Exposure != nil {
-		if _, ok := pc.ReloaderConfig(); !ok {
-			log.Info("exposure requested but Reloader is not enabled in the ProviderConfig; "+
-				"argocd-server will not auto-restart when its managed TLS certificate rotates",
-				"host", obj.Spec.Exposure.Host)
-		}
-	}
+	warnIfExposureWithoutReloader(ctx, obj, pc)
 
 	provisioner, err := r.newProvisioner(obj, pc, clusterCtx)
 	if err != nil {
@@ -340,4 +334,19 @@ func resolveReloader(pc *apiv1alpha1.ProviderConfig) *apiv1alpha1.ReloaderConfig
 		return nil
 	}
 	return &cfg
+}
+
+// warnIfExposureWithoutReloader logs when a tenant requests exposure but the
+// platform has not enabled Reloader. Exposure still works, but argocd-server
+// will not auto-restart when its managed TLS certificate rotates.
+func warnIfExposureWithoutReloader(ctx context.Context, obj *apiv1alpha1.ArgoCD, pc *apiv1alpha1.ProviderConfig) {
+	if obj.Spec.Exposure == nil {
+		return
+	}
+	if _, ok := pc.ReloaderConfig(); ok {
+		return
+	}
+	logf.FromContext(ctx).Info("exposure requested but Reloader is not enabled in the ProviderConfig; "+
+		"argocd-server will not auto-restart when its managed TLS certificate rotates",
+		"host", obj.Spec.Exposure.Host)
 }
