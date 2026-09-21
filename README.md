@@ -55,12 +55,24 @@ spec:
   version: "v3.1.0"
   # Optional: namespace on the ManagedControlPlane to install Argo CD into.
   namespaceOverride: argocd
+  # Optional: expose the Argo CD server externally via a TLS-terminated
+  # LoadBalancer (see "Exposure" below). Omit to keep Argo CD in-cluster only.
+  exposure:
+    host: argocd
+    # Optional: restrict LoadBalancer access to these CIDR ranges.
+    allowedIPs:
+      - 203.0.113.0/24
 ```
 
-| Field                   | Type   | Description                                                                           |
-| ----------------------- | ------ | ------------------------------------------------------------------------------------- |
-| `spec.version`          | string | The Argo CD version to install. Must match a version defined in the `ProviderConfig`. |
-| `spec.namespaceOverride`| string | Target namespace on the ManagedControlPlane. Defaults to the provider's namespace.    |
+| Field                    | Type   | Description                                                                           |
+| ------------------------ | ------ | ------------------------------------------------------------------------------------- |
+| `spec.version`           | string | The Argo CD version to install. Must match a version defined in the `ProviderConfig`. |
+| `spec.namespaceOverride` | string | Target namespace on the ManagedControlPlane. Defaults to the provider's namespace.    |
+| `spec.exposure`          | object | Optional external exposure of the Argo CD server. Its presence enables exposure.      |
+| `spec.exposure.host`     | string | Sub-domain label (e.g. `argocd`) or a fully-qualified domain name. A bare label is completed with the shoot's root domain, derived from the MCP apiserver host. |
+| `spec.exposure.allowedIPs` | array | Optional CIDR ranges allowed to reach the LoadBalancer. Empty means all sources. Invalid CIDRs are rejected. |
+| `status.endpoint`        | string | The externally reachable URL, published only once exposure is provisioned and ready.  |
+
 
 ### ProviderConfig
 
@@ -74,6 +86,17 @@ metadata:
 spec:
   # Optional: reconcile interval to prevent drift of managed resources.
   pollInterval: 1m
+  # Optional: landscape-wide policy applied when a tenant requests exposure.
+  exposure:
+    dnsClass: garden
+    dnsTTL: 3600
+    certPurpose: managed
+  # Optional: install the Stakater Reloader addon alongside Argo CD so
+  # argocd-server restarts when its managed TLS certificate rotates.
+  reloader:
+    chartVersion: "2.2.12"
+    # Optional: OCI registry URL of the Reloader Helm chart.
+    chartUrl: "oci://ghcr.io/stakater/charts/reloader"
   versions:
     - version: "v3.1.0"
       chartVersion: "8.1.0"
@@ -91,6 +114,15 @@ spec:
 | Field                             | Type     | Description                                                              |
 | --------------------------------- | -------- | ------------------------------------------------------------------------ |
 | `spec.pollInterval`               | duration | How often to reconcile managed resources to prevent drift (default: `1m`).|
+| `spec.exposure`                   | object   | Landscape-wide exposure policy applied when a tenant opts in.            |
+| `spec.exposure.dnsClass`          | string   | Gardener DNS class for managed records (default: `garden`).             |
+| `spec.exposure.dnsTTL`            | integer  | TTL in seconds for managed DNS records (default: `3600`).               |
+| `spec.exposure.certPurpose`       | string   | Value of the `cert.gardener.cloud/purpose` annotation (default: `managed`). |
+| `spec.reloader`                   | object   | Optional Stakater Reloader addon. When unset, Reloader is not installed. |
+| `spec.reloader.chartVersion`      | string   | OCI tag of the Reloader Helm chart to install (required when set).       |
+| `spec.reloader.chartUrl`          | string   | OCI registry URL for the Reloader chart (default: Stakater public chart).|
+| `spec.reloader.chartPullSecret`   | string   | Secret name for chart registry authentication.                           |
+| `spec.reloader.values`            | object   | Custom Helm values for the Reloader deployment.                          |
 | `spec.versions`                   | array    | The Argo CD versions that can be installed.                              |
 | `spec.versions[].version`         | string   | Argo CD version that maps to `ArgoCD.spec.version`.                      |
 | `spec.versions[].chartVersion`    | string   | Helm chart version to install.                                          |
