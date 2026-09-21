@@ -114,18 +114,18 @@ func (r *ArgoCDReconciler) Delete(ctx context.Context, obj *apiv1alpha1.ArgoCD, 
 	}
 
 	// Guard: refuse to delete while the user still has Applications.
-	applications, err := provisioner.CountUserApplications(ctx)
+	appsCount, err := provisioner.CountUserArgoCDResources(ctx)
 	if err != nil {
-		log.Error(err, "failed to list ArgoCD Applications")
+		log.Error(err, "failed to list ArgoCD resources")
 		return ctrl.Result{}, err
 	}
-	if applications > 0 {
+	if appsCount > 0 {
 		meta.SetStatusCondition(obj.GetConditions(), metav1.Condition{
 			Type:               conditionDeletionBlocked,
 			Status:             metav1.ConditionTrue,
 			ObservedGeneration: obj.GetGeneration(),
 			Reason:             reasonDeletionBlocked,
-			Message:            fmt.Sprintf("deletion blocked: %d ArgoCD Application(s) still present", applications),
+			Message:            "deletion blocked: ArgoCD CR(s) still present",
 		})
 		obj.SetObservedGeneration(obj.GetGeneration())
 		obj.SetPhase("Terminating")

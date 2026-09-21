@@ -8,7 +8,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/utils/ptr"
 
 	"sigs.k8s.io/e2e-framework/klient/wait"
@@ -27,34 +26,11 @@ import (
 // requested by the ArgoCD resource. Keep these in sync with the chart that is
 // actually published at the given URL.
 const (
-	testArgoCDVersion      = "3.5.1"
-	testArgoCDChartVersion = "10.4.0"
-	testArgoCDChartURL     = "oci://ghcr.io/argoproj/argo-helm/argo-cd"
+	testArgoCDVersion              = "3.5.1"
+	testArgoCDChartVersion         = "10.4.0"
+	testArgoCDChartURL             = "oci://ghcr.io/argoproj/argo-helm/argo-cd"
+	expectedDeletionBlockedMessage = "deletion blocked: ArgoCD CR(s) still present"
 )
-
-// newApplication returns a minimal but schema-valid ArgoCD Application used as
-// the domain object in the e2e tests. The Application CRD requires spec fields
-// (project, source, destination), so an empty object is rejected on create.
-func newApplication() *unstructured.Unstructured {
-	obj := &unstructured.Unstructured{}
-	obj.SetName("test-domain-object")
-	obj.SetNamespace("argocd")
-	obj.SetAPIVersion("argoproj.io/v1alpha1")
-	obj.SetKind("Application")
-	obj.Object["spec"] = map[string]interface{}{
-		"project": "default",
-		"source": map[string]interface{}{
-			"repoURL":        "https://github.com/argoproj/argocd-example-apps.git",
-			"path":           "guestbook",
-			"targetRevision": "HEAD",
-		},
-		"destination": map[string]interface{}{
-			"server":    "https://kubernetes.default.svc",
-			"namespace": "default",
-		},
-	}
-	return obj
-}
 
 func TestServiceProvider(t *testing.T) {
 	basicProviderTest := features.New("provider test").
@@ -77,7 +53,6 @@ func TestServiceProvider(t *testing.T) {
 		Setup(providers.CreateMCP("test-controlplane")).
 		Assess("verify provider can be successfully consumed",
 			func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-				config := c
 				config, err := clusterutils.OnboardingConfig()
 				if err != nil {
 					t.Error(err)
@@ -108,12 +83,20 @@ func TestServiceProvider(t *testing.T) {
 				if err := mcpConfig.Client().Resources().Create(ctx, domainObj); err != nil {
 					t.Errorf("failed to create domain object on controlplane: %v", err)
 				}
+				appSetObj := newApplicationSet()
+				if err := mcpConfig.Client().Resources().Create(ctx, appSetObj); err != nil {
+					t.Errorf("failed to create ApplicationSet on controlplane: %v", err)
+				}
+				appProjectObj := newAppProject()
+				if err := mcpConfig.Client().Resources().Create(ctx, appProjectObj); err != nil {
+					t.Errorf("failed to create AppProject on controlplane: %v", err)
+				}
+
 				return ctx
 			},
 		).
 		Assess("verify service deletion is blocked due to existing domain service object",
 			func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-				config := c
 				config, err := clusterutils.OnboardingConfig()
 				if err != nil {
 					t.Error(err)
@@ -131,9 +114,15 @@ func TestServiceProvider(t *testing.T) {
 					if err := config.Client().Resources().Get(ctx, api.GetName(), api.GetNamespace(), api); err != nil {
 						return false, nil
 					}
-					if c := meta.FindStatusCondition(api.Status.Conditions, "DeletionBlocked"); c != nil && c.Status == metav1.ConditionTrue {
+					cond := meta.FindStatusCondition(api.Status.Conditions, "DeletionBlocked")
+					if cond == nil {
+						return false, nil
+					}
+
+					if cond.Status == metav1.ConditionTrue && cond.Message == expectedDeletionBlockedMessage && cond.Reason == "UserResourcesPresent" {
 						return true, nil
 					}
+
 					return false, nil
 				}); err != nil {
 					t.Errorf("expected deletion to be blocked with reason UserResourcesPresent: %v", err)
@@ -141,23 +130,21 @@ func TestServiceProvider(t *testing.T) {
 				return ctx
 			},
 		).
-		Assess("delete domain object",
+		Assess(" “delete the test-created domain resources and remove the generated app finalizer.",
 			func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				mcpConfig, err := clusterutils.MCPConfig(ctx, c, "test-controlplane")
 				if err != nil {
 					t.Error(err)
 					return ctx
 				}
-				domainObj := newApplication()
-				if err := mcpConfig.Client().Resources().Delete(ctx, domainObj); err != nil {
-					t.Errorf("failed to delete domain object on controlplane: %v", err)
+				if err := cleanupArgoCDResources(ctx, mcpConfig); err != nil {
+					t.Fatalf("failed to delete ArgoCD resources: %v", err)
 				}
 				return ctx
 			},
 		).
 		Assess("verify service is deleted",
 			func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-				config := c
 				config, err := clusterutils.OnboardingConfig()
 				if err != nil {
 					t.Error(err)

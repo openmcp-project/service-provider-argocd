@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"k8s.io/apimachinery/pkg/runtime/schema"
+
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	fluxmeta "github.com/fluxcd/pkg/apis/meta"
 	"github.com/fluxcd/pkg/runtime/conditions"
@@ -132,18 +134,40 @@ func (p *Provisioner) IsUninstalled(ctx context.Context) (bool, error) {
 	}
 }
 
-// CountUserApplications returns the number of ArgoCD Application resources still
-// present on the MCP. It is used as a deletion guard. A missing Application CRD
-// is treated as zero.
-func (p *Provisioner) CountUserApplications(ctx context.Context) (int, error) {
+// CountUserArgoCDResources returns the number of ArgoCD Application and
+// ApplicationSet resources still present on the MCP. Missing CRDs are treated
+// as zero.
+func (p *Provisioner) CountUserArgoCDResources(ctx context.Context) (int, error) {
+	applications, err := p.countResourcesByGVK(ctx, applicationListGVK, "ArgoCD Applications")
+	if err != nil {
+		return 0, err
+	}
+
+	applicationSets, err := p.countResourcesByGVK(ctx, applicationSetListGVK, "ArgoCD ApplicationSets")
+	if err != nil {
+		return 0, err
+	}
+
+	appProjects, err := p.countResourcesByGVK(ctx, appProjectListGVK, "ArgoCD AppProjects")
+	if err != nil {
+		return 0, err
+	}
+
+	total := applications + applicationSets + appProjects
+	return total, nil
+}
+
+// countResourcesByGVK returns the number of MCP resources for the given list
+// kind. A missing CRD is treated as zero.
+func (p *Provisioner) countResourcesByGVK(ctx context.Context, gvk schema.GroupVersionKind, resourceName string) (int, error) {
 	list := &unstructured.UnstructuredList{}
-	list.SetGroupVersionKind(applicationListGVK)
+	list.SetGroupVersionKind(gvk)
 
 	if err := p.mcpClient.List(ctx, list); err != nil {
 		if meta.IsNoMatchError(err) {
 			return 0, nil
 		}
-		return 0, fmt.Errorf("listing ArgoCD Applications: %w", err)
+		return 0, fmt.Errorf("listing %s: %w", resourceName, err)
 	}
 	return len(list.Items), nil
 }
