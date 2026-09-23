@@ -91,8 +91,28 @@ func TestServiceProvider(t *testing.T) {
 				if err := config.Client().Resources().Create(ctx, api); err != nil {
 					t.Errorf("failed to create ArgoCD object: %v", err)
 				}
+
+				// Check if the status is Progressing before Ready
+				if err := wait.For(func(ctx context.Context) (bool, error) {
+					if err := config.Client().Resources().Get(ctx, api.GetName(), api.GetNamespace(), api); err != nil {
+						return false, nil
+					}
+					if c := meta.FindStatusCondition(api.Status.Conditions, "Ready"); c != nil && c.Status == metav1.ConditionFalse && c.Reason == "Reconciling" {
+						return true, nil
+					}
+					return false, nil
+				}); err != nil {
+					t.Errorf("expected status to be Progressing, but it was not: %v", err)
+				}
+
+				// Wait for the Ready condition to be True
 				if err := wait.For(openmcpconditions.Match(api, config, "Ready", corev1.ConditionTrue)); err != nil {
 					t.Error(err)
+				}
+
+				// Verify that the Phase is set to StatusPhaseReady
+				if api.Status.Phase != "Ready" {
+					t.Errorf("expected Phase to be Ready, but got: %v", api.Status.Phase)
 				}
 				return ctx
 			},
@@ -108,6 +128,7 @@ func TestServiceProvider(t *testing.T) {
 				if err := mcpConfig.Client().Resources().Create(ctx, domainObj); err != nil {
 					t.Errorf("failed to create domain object on controlplane: %v", err)
 				}
+
 				return ctx
 			},
 		).
@@ -126,17 +147,17 @@ func TestServiceProvider(t *testing.T) {
 				if err := config.Client().Resources().Delete(ctx, api); err != nil {
 					t.Errorf("failed to delete ArgoCD object: %v", err)
 				}
-				// verify object is stuck in Terminating with UserResourcesPresent reason
+				// verify object is stuck in Terminating
 				if err := wait.For(func(ctx context.Context) (bool, error) {
 					if err := config.Client().Resources().Get(ctx, api.GetName(), api.GetNamespace(), api); err != nil {
 						return false, nil
 					}
-					if c := meta.FindStatusCondition(api.Status.Conditions, "DeletionBlocked"); c != nil && c.Status == metav1.ConditionTrue {
+					if c := meta.FindStatusCondition(api.Status.Conditions, "Ready"); c != nil && c.Status == metav1.ConditionFalse && c.Reason == "Terminating" {
 						return true, nil
 					}
 					return false, nil
 				}); err != nil {
-					t.Errorf("expected deletion to be blocked with reason UserResourcesPresent: %v", err)
+					t.Errorf("expected deletion to be blocked with reason Terminating: %v", err)
 				}
 				return ctx
 			},
