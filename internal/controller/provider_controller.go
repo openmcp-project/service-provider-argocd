@@ -25,8 +25,6 @@ import (
 	"strings"
 	"time"
 
-	meta "k8s.io/apimachinery/pkg/api/meta"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -41,20 +39,16 @@ import (
 
 // Condition reasons surfaced on the ArgoCD resource status.
 const (
-	reasonReconciling     = "Reconciling"
-	reasonInvalidVersion  = "InvalidVersion"
-	reasonInvalidExposure = "InvalidExposure"
-	reasonEndpointPending = "EndpointPending"
-	reasonInstallFailed   = "InstallFailed"
-	reasonUninstalling    = "Uninstalling"
-	reasonDeletionBlocked = "UserResourcesPresent"
-
-	conditionDeletionBlocked = "DeletionBlocked"
-
-	// phaseFailed is a terminal phase used for invalid user input that will not
-	// resolve without a spec change. Unlike "Progressing", it signals that the
-	// controller is not actively working toward readiness.
-	phaseFailed = "Failed"
+	reasonReconciling               = "Reconciling"
+	reasonInvalidVersion            = "InvalidVersion"
+	reasonInvalidExposure           = "InvalidExposure"
+	reasonEndpointPending           = "EndpointPending"
+	reasonInstallFailed             = "InstallFailed"
+	reasonUninstalling              = "Uninstalling"
+	reasonProvisionerCreationFailed = "ProvisionerCreationFailed"
+	reasonReadinessCheckFailed      = "ReadinessCheckFailed"
+	reasonFailedToListApplications  = "FailedToListApplications"
+	reasonTerminating               = "Terminating"
 
 	// requeueInterval is how long to wait before re-checking asynchronous
 	// progress (e.g. namespace teardown or blocked deletion).
@@ -76,22 +70,22 @@ type ArgoCDReconciler struct {
 // invoked on every add or update event.
 func (r *ArgoCDReconciler) CreateOrUpdate(ctx context.Context, obj *apiv1alpha1.ArgoCD, pc *apiv1alpha1.ProviderConfig, clusterCtx clusteraccess.ClusterContext) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
-	serviceprovider.StatusProgressing(obj, reasonReconciling, "Reconcile in progress")
+	serviceprovider.StatusProgressing(obj, reasonReconciling, "Reconcile is in progress")
 
 	version, ok := pc.SelectVersion(obj.Spec.Version)
 	if !ok {
 		// Invalid user input: report it but do not requeue with an error, since
 		// retrying without a spec change would be futile.
 		msg := fmt.Sprintf("requested version %q is not offered by the provider configuration", obj.Spec.Version)
-		log.Info("rejecting ArgoCD request", "reason", msg)
-		statusFailed(obj, reasonInvalidVersion, msg)
+		log.Error(fmt.Errorf("rejecting ArgoCD request"), "invalid version requested", "reason", msg)
+		argocd.StatusFailed(obj, reasonInvalidVersion, msg)
 		return ctrl.Result{}, nil
 	}
 
 	if err := validateExposure(obj, clusterCtx.MCPCluster.APIServerEndpoint()); err != nil {
 		// User error: report and stop, do not requeue with an error.
 		log.Info("rejecting ArgoCD request", "reason", err.Error())
-		statusFailed(obj, reasonInvalidExposure, err.Error())
+		argocd.StatusFailed(obj, reasonInvalidExposure, err.Error())
 		return ctrl.Result{}, nil
 	}
 
@@ -99,17 +93,21 @@ func (r *ArgoCDReconciler) CreateOrUpdate(ctx context.Context, obj *apiv1alpha1.
 
 	provisioner, err := r.newProvisioner(obj, pc, clusterCtx)
 	if err != nil {
+		log.Error(err, "failed to create provisioner")
+		argocd.StatusFailed(obj, reasonProvisionerCreationFailed, err.Error())
 		return ctrl.Result{}, err
 	}
 
 	if err := provisioner.Install(ctx, version); err != nil {
 		log.Error(err, "failed to declare ArgoCD installation")
-		serviceprovider.StatusProgressing(obj, reasonInstallFailed, err.Error())
+		argocd.StatusFailed(obj, reasonInstallFailed, err.Error())
 		return ctrl.Result{}, err
 	}
 
 	ready, message, err := provisioner.Ready(ctx)
 	if err != nil {
+		log.Error(err, "failed to check readiness")
+		argocd.StatusFailed(obj, reasonReadinessCheckFailed, err.Error())
 		return ctrl.Result{}, err
 	}
 	if !ready {
@@ -141,10 +139,12 @@ func (r *ArgoCDReconciler) CreateOrUpdate(ctx context.Context, obj *apiv1alpha1.
 // orphaning workloads.
 func (r *ArgoCDReconciler) Delete(ctx context.Context, obj *apiv1alpha1.ArgoCD, pc *apiv1alpha1.ProviderConfig, clusterCtx clusteraccess.ClusterContext) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
-	serviceprovider.StatusTerminating(obj)
+	serviceprovider.StatusTerminatingWithReason(obj, reasonTerminating, "Resource termination initiated; cleanup tasks are in progress")
 
 	provisioner, err := r.newProvisioner(obj, pc, clusterCtx)
 	if err != nil {
+		log.Error(err, "failed to create provisioner")
+		argocd.StatusFailed(obj, reasonProvisionerCreationFailed, err.Error())
 		return ctrl.Result{}, err
 	}
 
@@ -152,29 +152,24 @@ func (r *ArgoCDReconciler) Delete(ctx context.Context, obj *apiv1alpha1.ArgoCD, 
 	applications, err := provisioner.CountUserApplications(ctx)
 	if err != nil {
 		log.Error(err, "failed to list ArgoCD Applications")
+		argocd.StatusFailed(obj, reasonFailedToListApplications, err.Error())
 		return ctrl.Result{}, err
 	}
 	if applications > 0 {
-		meta.SetStatusCondition(obj.GetConditions(), metav1.Condition{
-			Type:               conditionDeletionBlocked,
-			Status:             metav1.ConditionTrue,
-			ObservedGeneration: obj.GetGeneration(),
-			Reason:             reasonDeletionBlocked,
-			Message:            fmt.Sprintf("deletion blocked: %d ArgoCD Application(s) still present", applications),
-		})
-		obj.SetObservedGeneration(obj.GetGeneration())
-		obj.SetPhase("Terminating")
+		serviceprovider.StatusTerminatingWithReason(obj, reasonTerminating, fmt.Sprintf("deletion blocked: %d ArgoCD Application(s) still present", applications))
 		return ctrl.Result{RequeueAfter: requeueInterval}, nil
 	}
 
 	if err := provisioner.Uninstall(ctx); err != nil {
 		log.Error(err, "failed to uninstall ArgoCD")
-		serviceprovider.StatusTerminatingWithReason(obj, reasonUninstalling, err.Error())
+		argocd.StatusFailed(obj, reasonUninstalling, err.Error())
 		return ctrl.Result{}, err
 	}
 
 	uninstalled, err := provisioner.IsUninstalled(ctx)
 	if err != nil {
+		log.Error(err, "failed to check uninstallation status")
+		argocd.StatusFailed(obj, reasonUninstalling, err.Error())
 		return ctrl.Result{}, err
 	}
 	if !uninstalled {
@@ -217,16 +212,6 @@ func providerNamespace(obj *apiv1alpha1.ArgoCD) string {
 		return ""
 	}
 	return obj.Spec.NamespaceOverride
-}
-
-// statusFailed marks the resource as failed due to invalid user input. It sets
-// the Ready condition to False with the given reason/message and a terminal
-// "Failed" phase, distinguishing a spec that must be corrected from work that
-// is still in progress. The openmcp runtime only ships Progressing/Ready/
-// Terminating helpers, so this sets the phase explicitly.
-func statusFailed(obj *apiv1alpha1.ArgoCD, reason, message string) {
-	serviceprovider.StatusProgressing(obj, reason, message)
-	obj.SetPhase(phaseFailed)
 }
 
 // hostPattern validates the tenant-supplied exposure host. It accepts a single
