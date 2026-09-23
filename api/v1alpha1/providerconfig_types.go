@@ -37,6 +37,71 @@ type ProviderConfigSpec struct {
 	// +kubebuilder:default:="1m"
 	// +kubebuilder:validation:Format=duration
 	PollInterval *metav1.Duration `json:"pollInterval,omitempty"`
+
+	// Exposure defines platform-level policy applied when a tenant requests
+	// external exposure of the ArgoCD server (DNS class, TTL and certificate
+	// purpose). Tenants only choose the hostname and source ranges; the platform
+	// owns these landscape-wide settings.
+	// +optional
+	Exposure *ExposurePolicy `json:"exposure,omitempty"`
+
+	// Reloader optionally installs the Stakater Reloader controller alongside
+	// ArgoCD on each Managed Control Plane. When set, the provider declares a
+	// dedicated OCIRepository + HelmRelease for it in the same namespace as
+	// ArgoCD so that argocd-server is automatically restarted when its
+	// Gardener-managed TLS certificate rotates. When nil, Reloader is not
+	// installed. Reloader is treated as a best-effort addon: its failures are
+	// logged but never affect the lifecycle of the ArgoCD CR.
+	// +optional
+	Reloader *ReloaderConfig `json:"reloader,omitempty"`
+}
+
+// ReloaderConfig describes the Stakater Reloader Helm chart to install
+// alongside ArgoCD on each Managed Control Plane.
+type ReloaderConfig struct {
+	// Version is an informational label for the Reloader release (e.g. the
+	// Reloader app version). It is not used to select artifacts; ChartVersion
+	// governs what is installed.
+	// +optional
+	Version string `json:"version,omitempty"`
+
+	// ChartURL is the OCI registry URL for the Reloader Helm chart.
+	// +optional
+	// +kubebuilder:default="oci://ghcr.io/stakater/charts/reloader"
+	ChartURL string `json:"chartUrl,omitempty"`
+
+	// ChartVersion is the OCI tag of the Reloader Helm chart to install.
+	// +required
+	ChartVersion string `json:"chartVersion"`
+
+	// ChartPullSecret is the name of a Secret in the service provider's
+	// namespace containing credentials to pull the chart from a private OCI
+	// registry.
+	// +optional
+	ChartPullSecret string `json:"chartPullSecret,omitempty"`
+
+	// Values contains Helm values to override the Reloader chart defaults.
+	// +optional
+	Values *apiextensionsv1.JSON `json:"values,omitempty"`
+}
+
+// ExposurePolicy captures the Gardener-specific, landscape-wide settings used
+// when exposing an ArgoCD server. All fields have sensible defaults.
+type ExposurePolicy struct {
+	// DNSClass is the Gardener DNS class used for managed DNS records.
+	// +optional
+	// +kubebuilder:default="garden"
+	DNSClass string `json:"dnsClass,omitempty"`
+
+	// DNSTTL is the TTL, in seconds, for managed DNS records.
+	// +optional
+	// +kubebuilder:default=3600
+	DNSTTL int `json:"dnsTTL,omitempty"`
+
+	// CertPurpose is the value of the cert.gardener.cloud/purpose annotation.
+	// +optional
+	// +kubebuilder:default="managed"
+	CertPurpose string `json:"certPurpose,omitempty"`
 }
 
 // ArgoCDVersion defines a version of ArgoCD that can be installed.
@@ -146,4 +211,50 @@ func (o *ProviderConfig) SelectVersion(requestedVersion string) (ArgoCDVersion, 
 		}
 	}
 	return ArgoCDVersion{}, false
+}
+
+// Default values for the exposure policy.
+const (
+	DefaultDNSClass    = "garden"
+	DefaultDNSTTL      = 3600
+	DefaultCertPurpose = "managed"
+
+	// DefaultReloaderChartURL is the public Stakater Reloader OCI chart URL.
+	DefaultReloaderChartURL = "oci://ghcr.io/stakater/charts/reloader"
+)
+
+// ExposurePolicy returns the effective exposure policy, filling in defaults for
+// any unset field and tolerating a nil spec.exposure.
+func (o *ProviderConfig) ExposurePolicy() ExposurePolicy {
+	policy := ExposurePolicy{
+		DNSClass:    DefaultDNSClass,
+		DNSTTL:      DefaultDNSTTL,
+		CertPurpose: DefaultCertPurpose,
+	}
+	if o == nil || o.Spec.Exposure == nil {
+		return policy
+	}
+	if o.Spec.Exposure.DNSClass != "" {
+		policy.DNSClass = o.Spec.Exposure.DNSClass
+	}
+	if o.Spec.Exposure.DNSTTL != 0 {
+		policy.DNSTTL = o.Spec.Exposure.DNSTTL
+	}
+	if o.Spec.Exposure.CertPurpose != "" {
+		policy.CertPurpose = o.Spec.Exposure.CertPurpose
+	}
+	return policy
+}
+
+// ReloaderConfig returns the effective Reloader configuration and whether
+// Reloader is enabled. ChartURL is defaulted when omitted.
+func (o *ProviderConfig) ReloaderConfig() (ReloaderConfig, bool) {
+	if o == nil || o.Spec.Reloader == nil {
+		return ReloaderConfig{}, false
+	}
+	cfg := *o.Spec.Reloader
+	if cfg.ChartURL == "" {
+		cfg.ChartURL = DefaultReloaderChartURL
+	}
+	return cfg, true
 }

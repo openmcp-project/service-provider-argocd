@@ -15,13 +15,39 @@ const (
 	ociRepositoryName = "argocd"
 	helmReleaseName   = "argocd"
 
+	// reloaderOCIRepositoryName and reloaderHelmReleaseName are the stable names
+	// of the Flux resources for the optional Stakater Reloader addon. They share
+	// the tenant namespace with the ArgoCD resources.
+	reloaderOCIRepositoryName = "argocd-reloader"
+	reloaderHelmReleaseName   = "argocd-reloader"
+
 	// kubeConfigSecretKey is the key under which the MCP kubeconfig is stored
 	// in the access secret referenced by the HelmRelease.
 	kubeConfigSecretKey = "kubeconfig"
 
-	// managedByLabel marks resources created by this provider.
-	managedByLabel = "app.kubernetes.io/managed-by"
-	managedByValue = "service-provider-argocd"
+	// serverTLSSecretName is the well-known ArgoCD server TLS secret on the MCP,
+	// used to resolve external-endpoint readiness.
+	serverTLSSecretName = "argocd-server-tls"
+
+	// ArgoCD stamps these stable labels on the server components regardless of
+	// the Helm release name.
+	labelPartOf      = "app.kubernetes.io/part-of"
+	labelPartOfValue = "argocd"
+	labelComponent   = "app.kubernetes.io/component"
+	labelServerValue = "server"
+
+	// managedByLabel is the standard Kubernetes "managed-by" label key.
+	// managedByArgoCDValue is used on core ArgoCD Flux resources and is watched
+	// by the opencontrolplane-runtime framework: a HelmRelease with this label
+	// entering a Failed state causes the framework to delete the owning ArgoCD CR.
+	managedByLabel       = "app.kubernetes.io/managed-by"
+	managedByArgoCDValue = "service-provider-argocd"
+
+	// managedByReloaderValue is used exclusively on Reloader addon resources.
+	// It is intentionally different from managedByArgoCDValue so the framework's
+	// watch never sees Reloader HelmRelease failures and never cascades them into
+	// ArgoCD CR deletion.
+	managedByReloaderValue = "service-provider-argocd-reloader"
 )
 
 // applicationListGVK identifies the ArgoCD Application list kind. It is used as

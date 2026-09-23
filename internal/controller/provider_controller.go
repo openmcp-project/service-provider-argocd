@@ -19,6 +19,10 @@ package controller
 import (
 	"context"
 	"fmt"
+	"net"
+	"net/url"
+	"regexp"
+	"strings"
 	"time"
 
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -37,6 +41,8 @@ import (
 const (
 	reasonReconciling               = "Reconciling"
 	reasonInvalidVersion            = "InvalidVersion"
+	reasonInvalidExposure           = "InvalidExposure"
+	reasonEndpointPending           = "EndpointPending"
 	reasonInstallFailed             = "InstallFailed"
 	reasonUninstalling              = "Uninstalling"
 	reasonProvisionerCreationFailed = "ProvisionerCreationFailed"
@@ -76,6 +82,15 @@ func (r *ArgoCDReconciler) CreateOrUpdate(ctx context.Context, obj *apiv1alpha1.
 		return ctrl.Result{}, nil
 	}
 
+	if err := validateExposure(obj, clusterCtx.MCPCluster.APIServerEndpoint()); err != nil {
+		// User error: report and stop, do not requeue with an error.
+		log.Info("rejecting ArgoCD request", "reason", err.Error())
+		argocd.StatusFailed(obj, reasonInvalidExposure, err.Error())
+		return ctrl.Result{}, nil
+	}
+
+	warnIfExposureWithoutReloader(ctx, obj, pc)
+
 	provisioner, err := r.newProvisioner(obj, pc, clusterCtx)
 	if err != nil {
 		log.Error(err, "failed to create provisioner")
@@ -99,6 +114,21 @@ func (r *ArgoCDReconciler) CreateOrUpdate(ctx context.Context, obj *apiv1alpha1.
 		serviceprovider.StatusProgressing(obj, reasonReconciling, message)
 		return ctrl.Result{RequeueAfter: requeueInterval}, nil
 	}
+
+	// ArgoCD is installed; resolve external exposure (if requested) before
+	// declaring the resource Ready.
+	endpoint, endpointReady, err := provisioner.Endpoint(ctx)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if !endpointReady {
+		// Do not publish the endpoint until it is actually reachable, per the
+		// status.endpoint contract.
+		obj.Status.Endpoint = ""
+		serviceprovider.StatusProgressing(obj, reasonEndpointPending, "waiting for LoadBalancer address and managed TLS certificate")
+		return ctrl.Result{RequeueAfter: requeueInterval}, nil
+	}
+	obj.Status.Endpoint = endpoint
 
 	serviceprovider.StatusReady(obj)
 	return ctrl.Result{}, nil
@@ -170,6 +200,8 @@ func (r *ArgoCDReconciler) newProvisioner(obj *apiv1alpha1.ArgoCD, pc *apiv1alph
 		MCPNamespace:         providerNamespace(obj),
 		KubeConfigSecretName: clusterCtx.MCPAccessSecretKey.Name,
 		PollInterval:         pc.PollInterval(),
+		Exposure:             resolveExposure(obj, pc, clusterCtx.MCPCluster.APIServerEndpoint()),
+		Reloader:             resolveReloader(pc),
 	}), nil
 }
 
@@ -180,4 +212,126 @@ func providerNamespace(obj *apiv1alpha1.ArgoCD) string {
 		return ""
 	}
 	return obj.Spec.NamespaceOverride
+}
+
+// hostPattern validates the tenant-supplied exposure host. It accepts a single
+// DNS label (for example "argocd") or a dotted, fully-qualified domain name.
+// Each label is 1-63 characters, starts and ends with an alphanumeric, and may
+// contain hyphens in between. Matching is case-insensitive.
+var hostPattern = regexp.MustCompile(`^(?i)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$`)
+
+// validateExposure rejects requests whose exposure host is missing, malformed,
+// or cannot be completed into a fully-qualified name. It returns nil when
+// exposure is not requested. Because this runs before any provisioning, an
+// invalid host results in no resources being created on the MCP.
+func validateExposure(obj *apiv1alpha1.ArgoCD, mcpAPIServerHost string) error {
+	e := obj.Spec.Exposure
+	if e == nil {
+		return nil
+	}
+	if e.Host == "" {
+		return fmt.Errorf("spec.exposure.host is required when spec.exposure is set")
+	}
+	if !hostPattern.MatchString(e.Host) {
+		return fmt.Errorf("spec.exposure.host %q is not a valid DNS name: each label must be 1-63 characters, start and end with an alphanumeric, and contain only letters, digits or hyphens", e.Host)
+	}
+
+	for _, cidr := range e.AllowedIPs {
+		if _, _, err := net.ParseCIDR(strings.TrimSpace(cidr)); err != nil {
+			return fmt.Errorf("spec.exposure.allowedIPs entry %q is not a valid CIDR range (for example 203.0.113.0/24 or 203.0.113.5/32): %w", cidr, err)
+		}
+	}
+
+	fqdn, err := composeHost(e.Host, mcpAPIServerHost)
+	if err != nil {
+		return err
+	}
+	if len(fqdn) > 253 {
+		return fmt.Errorf("resolved exposure host %q exceeds the maximum DNS name length of 253 characters", fqdn)
+	}
+	return nil
+}
+
+// deriveRootDomain extracts the shoot's root DNS zone from its apiserver URL by
+// stripping the leading "api." label.
+func deriveRootDomain(serverURL string) (string, error) {
+	serverURL = strings.TrimSpace(serverURL)
+	if serverURL == "" {
+		return "", fmt.Errorf("empty apiserver URL")
+	}
+	u, err := url.Parse(serverURL)
+	if err != nil {
+		return "", fmt.Errorf("parsing apiserver URL %q: %w", serverURL, err)
+	}
+	host := u.Hostname()
+	if host == "" {
+		host = serverURL
+	}
+	labels := strings.Split(host, ".")
+	if len(labels) < 3 || labels[0] != "api" {
+		return "", fmt.Errorf("apiserver host %q is not shaped like \"api.<domain>\"; cannot derive base domain", host)
+	}
+	return strings.Join(labels[1:], "."), nil
+}
+
+// composeHost turns the tenant-provided host into a fully-qualified domain name.
+func composeHost(host, mcpAPIServerHost string) (string, error) {
+	host = strings.TrimSuffix(strings.TrimSpace(host), ".")
+	if strings.Contains(host, ".") {
+		return host, nil
+	}
+	baseDomain, err := deriveRootDomain(mcpAPIServerHost)
+	if err != nil {
+		return "", fmt.Errorf("spec.exposure.host %q is a bare label but the base domain could not be derived from the MCP apiserver host: %w", host, err)
+	}
+	return host + "." + baseDomain, nil
+}
+
+// resolveExposure combines the tenant's exposure request with the platform's
+// exposure policy. It returns a disabled value when exposure is not requested.
+func resolveExposure(obj *apiv1alpha1.ArgoCD, pc *apiv1alpha1.ProviderConfig, mcpAPIServerHost string) argocd.ExposureValues {
+	e := obj.Spec.Exposure
+	if e == nil {
+		return argocd.ExposureValues{}
+	}
+	policy := pc.ExposurePolicy()
+	_, reloaderEnabled := pc.ReloaderConfig()
+	host, err := composeHost(e.Host, mcpAPIServerHost)
+	if err != nil {
+		host = e.Host
+	}
+	return argocd.ExposureValues{
+		Enabled:         true,
+		Host:            host,
+		AllowedIPs:      e.AllowedIPs,
+		DNSClass:        policy.DNSClass,
+		DNSTTL:          policy.DNSTTL,
+		CertPurpose:     policy.CertPurpose,
+		ReloaderEnabled: reloaderEnabled,
+	}
+}
+
+// resolveReloader returns the Reloader configuration from the ProviderConfig,
+// or nil when Reloader is not enabled.
+func resolveReloader(pc *apiv1alpha1.ProviderConfig) *apiv1alpha1.ReloaderConfig {
+	cfg, ok := pc.ReloaderConfig()
+	if !ok {
+		return nil
+	}
+	return &cfg
+}
+
+// warnIfExposureWithoutReloader logs when a tenant requests exposure but the
+// platform has not enabled Reloader. Exposure still works, but argocd-server
+// will not auto-restart when its managed TLS certificate rotates.
+func warnIfExposureWithoutReloader(ctx context.Context, obj *apiv1alpha1.ArgoCD, pc *apiv1alpha1.ProviderConfig) {
+	if obj.Spec.Exposure == nil {
+		return
+	}
+	if _, ok := pc.ReloaderConfig(); ok {
+		return
+	}
+	logf.FromContext(ctx).Info("exposure requested but Reloader is not enabled in the ProviderConfig; "+
+		"argocd-server will not auto-restart when its managed TLS certificate rotates",
+		"host", obj.Spec.Exposure.Host)
 }
