@@ -40,17 +40,49 @@ type ArgoCDSpec struct {
 	// namespace is used.
 	// +optional
 	NamespaceOverride string `json:"namespaceOverride,omitempty"`
+
+	// Exposure configures external access to the ArgoCD server UI/API. When left
+	// unset, ArgoCD is only reachable in-cluster.
+	// +optional
+	Exposure *ServerExposure `json:"exposure,omitempty"`
+}
+
+// ServerExposure configures external, TLS-terminated access to the ArgoCD
+// server. Its mere presence enables exposure: on Gardener the LoadBalancer
+// Service is annotated so that the shoot-dns-service and shoot-cert-service
+// provision DNS records and an ACME certificate automatically.
+type ServerExposure struct {
+	// Host is the sub-domain label (for example "argocd") or a fully-qualified
+	// domain name under which the ArgoCD server will be reachable. A bare label
+	// is completed with the shoot's root domain, derived from the MCP apiserver
+	// host. Each DNS label is limited to 63 characters.
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	Host string `json:"host"`
+
+	// AllowedIPs optionally restricts access to the LoadBalancer to the given
+	// CIDR ranges. When empty, the LoadBalancer accepts traffic from any source.
+	// +optional
+	AllowedIPs []string `json:"allowedIPs,omitempty"`
 }
 
 // ArgoCDStatus defines the observed state of ArgoCD.
 type ArgoCDStatus struct {
 	commonapi.Status `json:",inline"`
+
+	// Endpoint is the externally reachable URL of the ArgoCD server once exposure
+	// has been provisioned. It is empty when exposure is disabled or not yet
+	// ready.
+	// +optional
+	Endpoint string `json:"endpoint,omitempty"`
 }
 
 // ArgoCD is the Schema for the argocds API
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:JSONPath=`.status.phase`,name="Phase",type=string
+// +kubebuilder:printcolumn:JSONPath=`.status.endpoint`,name="Endpoint",type=string
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:metadata:labels="openmcp.cloud/cluster=onboarding"
 type ArgoCD struct {

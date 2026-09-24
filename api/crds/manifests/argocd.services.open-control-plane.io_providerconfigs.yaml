@@ -41,12 +41,72 @@ spec:
           spec:
             description: spec defines the desired state of ProviderConfig
             properties:
+              exposure:
+                description: |-
+                  Exposure defines platform-level policy applied when a tenant requests
+                  external exposure of the ArgoCD server (DNS class, TTL and certificate
+                  purpose). Tenants only choose the hostname and source ranges; the platform
+                  owns these landscape-wide settings.
+                properties:
+                  certPurpose:
+                    default: managed
+                    description: CertPurpose is the value of the cert.gardener.cloud/purpose
+                      annotation.
+                    type: string
+                  dnsClass:
+                    default: garden
+                    description: DNSClass is the Gardener DNS class used for managed
+                      DNS records.
+                    type: string
+                  dnsTTL:
+                    default: 3600
+                    description: DNSTTL is the TTL, in seconds, for managed DNS records.
+                    type: integer
+                type: object
               pollInterval:
                 default: 1m
                 description: PollInterval determines how often to reconcile resources
                   to prevent drift.
                 format: duration
                 type: string
+              reloader:
+                description: |-
+                  Reloader optionally installs the Stakater Reloader controller alongside
+                  ArgoCD on each Managed Control Plane. When set, the provider declares a
+                  dedicated OCIRepository + HelmRelease for it in the same namespace as
+                  ArgoCD so that argocd-server is automatically restarted when its
+                  Gardener-managed TLS certificate rotates. When nil, Reloader is not
+                  installed. Reloader is treated as a best-effort addon: its failures are
+                  logged but never affect the lifecycle of the ArgoCD CR.
+                properties:
+                  chartPullSecret:
+                    description: |-
+                      ChartPullSecret is the name of a Secret in the service provider's
+                      namespace containing credentials to pull the chart from a private OCI
+                      registry.
+                    type: string
+                  chartUrl:
+                    default: oci://ghcr.io/stakater/charts/reloader
+                    description: ChartURL is the OCI registry URL for the Reloader
+                      Helm chart.
+                    type: string
+                  chartVersion:
+                    description: ChartVersion is the OCI tag of the Reloader Helm
+                      chart to install.
+                    type: string
+                  values:
+                    description: Values contains Helm values to override the Reloader
+                      chart defaults.
+                    x-kubernetes-preserve-unknown-fields: true
+                  version:
+                    description: |-
+                      Version is an informational label for the Reloader release (e.g. the
+                      Reloader app version). It is not used to select artifacts; ChartVersion
+                      governs what is installed.
+                    type: string
+                required:
+                - chartVersion
+                type: object
               versions:
                 description: |-
                   Versions specify the valid inputs for the ArgoCD.Spec.Version field.
