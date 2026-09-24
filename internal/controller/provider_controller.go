@@ -152,6 +152,7 @@ func (r *ArgoCDReconciler) Delete(ctx context.Context, obj *apiv1alpha1.ArgoCD, 
 	appsCount, err := provisioner.CountUserArgoCDResources(ctx)
 	if err != nil {
 		log.Error(err, "failed to list ArgoCD resources")
+		argocd.StatusFailed(obj, reasonFailedToListApplications, err.Error())
 		return ctrl.Result{}, err
 	}
 
