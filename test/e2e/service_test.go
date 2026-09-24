@@ -18,6 +18,7 @@ import (
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/features"
 
+	openmcpconsts "github.com/openmcp-project/openmcp-operator/api/constants"
 	libutils "github.com/openmcp-project/openmcp-operator/lib/utils"
 	"github.com/openmcp-project/openmcp-testing/pkg/clusterutils"
 	"github.com/openmcp-project/openmcp-testing/pkg/providers"
@@ -169,6 +170,104 @@ func TestServiceProvider(t *testing.T) {
 				// Verify that the Phase is set to StatusPhaseReady
 				if api.Status.Phase != "Ready" {
 					t.Errorf("expected Phase to be Ready, but got: %v", api.Status.Phase)
+				}
+				return ctx
+			},
+		).
+
+		// ── 1b. Operation annotation ─────────────────────────────────────────────
+		Assess("operation annotation 'reconcile' is consumed and removed by the controller",
+			func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+				onboardingCfg, err := clusterutils.OnboardingConfig()
+				if err != nil {
+					t.Error(err)
+					return ctx
+				}
+				apiv1alpha1.AddToScheme(onboardingCfg.Client().Resources().GetScheme())
+
+				api := &apiv1alpha1.ArgoCD{}
+				if err := onboardingCfg.Client().Resources().Get(ctx, mcpName, "default", api); err != nil {
+					t.Errorf("failed to get ArgoCD: %v", err)
+					return ctx
+				}
+				// Request an on-demand reconcile. The controller must consume the
+				// request by deleting the annotation.
+				annotations := api.GetAnnotations()
+				if annotations == nil {
+					annotations = map[string]string{}
+				}
+				annotations[openmcpconsts.OperationAnnotation] = openmcpconsts.OperationAnnotationValueReconcile
+				api.SetAnnotations(annotations)
+				if err := onboardingCfg.Client().Resources().Update(ctx, api); err != nil {
+					t.Errorf("failed to set reconcile annotation: %v", err)
+					return ctx
+				}
+
+				if err := wait.For(func(ctx context.Context) (bool, error) {
+					if err := onboardingCfg.Client().Resources().Get(ctx, mcpName, "default", api); err != nil {
+						return false, nil
+					}
+					_, present := api.GetAnnotations()[openmcpconsts.OperationAnnotation]
+					return !present, nil
+				}, wait.WithTimeout(1*time.Minute)); err != nil {
+					t.Errorf("reconcile operation annotation was not removed by the controller: %v", err)
+				}
+				return ctx
+			},
+		).
+		Assess("operation annotation 'ignore' halts reconciliation",
+			func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+				onboardingCfg, err := clusterutils.OnboardingConfig()
+				if err != nil {
+					t.Error(err)
+					return ctx
+				}
+				apiv1alpha1.AddToScheme(onboardingCfg.Client().Resources().GetScheme())
+
+				api := &apiv1alpha1.ArgoCD{}
+				if err := onboardingCfg.Client().Resources().Get(ctx, mcpName, "default", api); err != nil {
+					t.Errorf("failed to get ArgoCD: %v", err)
+					return ctx
+				}
+				// Mark the resource ignored and, in the same update, request a version
+				// that the ProviderConfig does not offer. If the controller were still
+				// reconciling it would report InvalidVersion; because the resource is
+				// ignored it must stay untouched (Ready, annotation intact).
+				annotations := api.GetAnnotations()
+				if annotations == nil {
+					annotations = map[string]string{}
+				}
+				annotations[openmcpconsts.OperationAnnotation] = openmcpconsts.OperationAnnotationValueIgnore
+				api.SetAnnotations(annotations)
+				api.Spec.Version = "0.0.0-does-not-exist"
+				if err := onboardingCfg.Client().Resources().Update(ctx, api); err != nil {
+					t.Errorf("failed to set ignore annotation: %v", err)
+					return ctx
+				}
+
+				// Give the controller a window to (not) react.
+				time.Sleep(20 * time.Second)
+				if err := onboardingCfg.Client().Resources().Get(ctx, mcpName, "default", api); err != nil {
+					t.Errorf("failed to re-read ArgoCD: %v", err)
+					return ctx
+				}
+				if cond := meta.FindStatusCondition(api.Status.Conditions, "Ready"); cond == nil {
+					t.Error("Ready condition disappeared while the resource was ignored")
+				} else if cond.Reason == statusReasonInvalidVersion {
+					t.Errorf("controller acted on an ignored resource: Ready reason is %q", cond.Reason)
+				}
+				if _, present := api.GetAnnotations()[openmcpconsts.OperationAnnotation]; !present {
+					t.Error("ignore annotation was removed; the controller must not modify an ignored resource")
+				}
+
+				// Cleanup: drop the ignore annotation and restore a valid version so
+				// the remaining lifecycle steps run against a healthy resource.
+				current := api.GetAnnotations()
+				delete(current, openmcpconsts.OperationAnnotation)
+				api.SetAnnotations(current)
+				api.Spec.Version = testArgoCDVersion
+				if err := onboardingCfg.Client().Resources().Update(ctx, api); err != nil {
+					t.Errorf("failed to clear ignore annotation: %v", err)
 				}
 				return ctx
 			},

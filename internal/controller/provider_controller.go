@@ -29,8 +29,10 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/openmcp-project/controller-utils/pkg/clusters"
+	ctrlutils "github.com/openmcp-project/controller-utils/pkg/controller"
 	"github.com/openmcp-project/opencontrolplane-runtime/pkg/serviceprovider"
 	clusteraccess "github.com/openmcp-project/opencontrolplane-runtime/pkg/serviceprovider/clusteraccess"
+	openmcpconsts "github.com/openmcp-project/openmcp-operator/api/constants"
 	libutils "github.com/openmcp-project/openmcp-operator/lib/utils"
 
 	apiv1alpha1 "github.com/openmcp-project/service-provider-argocd/api/v1alpha1"
@@ -70,6 +72,15 @@ type ArgoCDReconciler struct {
 // invoked on every add or update event.
 func (r *ArgoCDReconciler) CreateOrUpdate(ctx context.Context, obj *apiv1alpha1.ArgoCD, pc *apiv1alpha1.ProviderConfig, clusterCtx clusteraccess.ClusterContext) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
+
+	skip, err := r.handleOperationAnnotation(ctx, obj)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if skip {
+		return ctrl.Result{}, nil
+	}
+
 	serviceprovider.StatusProgressing(obj, reasonReconciling, "Reconcile is in progress")
 
 	version, ok := pc.SelectVersion(obj.Spec.Version)
@@ -115,21 +126,37 @@ func (r *ArgoCDReconciler) CreateOrUpdate(ctx context.Context, obj *apiv1alpha1.
 		return ctrl.Result{RequeueAfter: requeueInterval}, nil
 	}
 
-	// ArgoCD is installed; resolve external exposure (if requested) before
-	// declaring the resource Ready.
-	endpoint, endpointReady, err := provisioner.Endpoint(ctx)
+	// Exposure is optional. Without it there is no external endpoint to wait
+	// for, so the resource is Ready as soon as ArgoCD is installed.
+	if obj.Spec.Exposure == nil {
+		obj.Status.Endpoint = ""
+		serviceprovider.StatusReady(obj)
+		return ctrl.Result{}, nil
+	}
+
+	// Exposure was requested: publish the endpoint and mark Ready only once it
+	// is actually reachable.
+	return r.reconcileEndpoint(ctx, provisioner, obj)
+}
+
+// reconcileEndpoint resolves the requested external endpoint. Once the
+// LoadBalancer address and managed TLS certificate are in place it publishes the
+// endpoint on the status and marks the resource Ready; until then it reports
+// progress and requeues. It is only called when exposure is requested.
+func (r *ArgoCDReconciler) reconcileEndpoint(ctx context.Context, provisioner *argocd.Provisioner, obj *apiv1alpha1.ArgoCD) (ctrl.Result, error) {
+	endpoint, ready, err := provisioner.Endpoint(ctx)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if !endpointReady {
+	if !ready {
 		// Do not publish the endpoint until it is actually reachable, per the
 		// status.endpoint contract.
 		obj.Status.Endpoint = ""
 		serviceprovider.StatusProgressing(obj, reasonEndpointPending, "waiting for LoadBalancer address and managed TLS certificate")
 		return ctrl.Result{RequeueAfter: requeueInterval}, nil
 	}
-	obj.Status.Endpoint = endpoint
 
+	obj.Status.Endpoint = endpoint
 	serviceprovider.StatusReady(obj)
 	return ctrl.Result{}, nil
 }
@@ -334,4 +361,31 @@ func warnIfExposureWithoutReloader(ctx context.Context, obj *apiv1alpha1.ArgoCD,
 	logf.FromContext(ctx).Info("exposure requested but Reloader is not enabled in the ProviderConfig; "+
 		"argocd-server will not auto-restart when its managed TLS certificate rotates",
 		"host", obj.Spec.Exposure.Host)
+}
+
+// handleOperationAnnotation honours the OpenControlPlane operation annotation on
+// the ArgoCD resource. It returns skip=true when the resource is marked "ignore"
+// (reconciliation should be a no-op), and clears the annotation when a one-shot
+// "reconcile" is requested before proceeding. It is intentionally consulted only
+// on the create/update path: an "ignore" must never block deletion/teardown.
+func (r *ArgoCDReconciler) handleOperationAnnotation(ctx context.Context, obj *apiv1alpha1.ArgoCD) (bool, error) {
+	log := logf.FromContext(ctx)
+
+	value, ok := ctrlutils.GetAnnotation(obj, openmcpconsts.OperationAnnotation)
+	if !ok {
+		return false, nil
+	}
+
+	switch value {
+	case openmcpconsts.OperationAnnotationValueIgnore:
+		log.Info("Ignoring resource due to ignore operation annotation")
+		return true, nil
+	case openmcpconsts.OperationAnnotationValueReconcile:
+		log.Info("Reconciliation requested via operation annotation. Removing annotation and proceeding with reconciliation")
+		if err := ctrlutils.EnsureAnnotation(ctx, r.OnboardingCluster.Client(), obj, openmcpconsts.OperationAnnotation, openmcpconsts.OperationAnnotationValueReconcile, true, ctrlutils.DELETE); err != nil {
+			return false, fmt.Errorf("failed to remove reconcile operation annotation: %w", err)
+		}
+	}
+
+	return false, nil
 }
