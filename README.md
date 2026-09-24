@@ -132,6 +132,28 @@ spec:
 
 For private chart registries, set `spec.versions[].chartPullSecret` to a Secret in the controller namespace; it is referenced by the Flux `OCIRepository` to pull the chart. Image locations and image pull secrets can be adjusted via `spec.versions[].values`, which are passed directly to the managed `HelmRelease`.
 
+## API Stability
+
+All CRDs in this project are currently at **`v1alpha1`**. Alpha APIs carry no compatibility guarantee: fields may be renamed, removed, or restructured between releases without a deprecation cycle. Consumers should not depend on the schema remaining stable.
+
+### Change policy by maturity level
+
+| Version | Breaking changes allowed? | Deprecation cycle required? |
+| ------- | :----------------------: | :-------------------------: |
+| `v1alpha1` | Yes | No |
+| `v1beta1` | Yes, with notice | Yes — at least one minor release of parallel support |
+| `v1` (GA) | No | N/A — only additive changes |
+
+### Promotion criteria
+
+A CRD is promoted from `v1alpha1` to `v1beta1` when:
+- The schema has been stable across several releases with no removals or renames.
+- External consumers (outside this repository) are depending on the resource in production.
+
+### Multi-version support
+
+`v1alpha1` is the designated **conversion hub**. If a future version is added, its types will implement `ConvertTo(*v1alpha1.X)` / `ConvertFrom(*v1alpha1.X)` (hub-and-spoke pattern), and a conversion webhook will be introduced at that point. No changes to `v1alpha1` types will be needed when that happens.
+
 ## Getting Started
 
 ### Prerequisites
@@ -172,7 +194,7 @@ This uses the [openmcp-testing](https://github.com/openmcp-project/openmcp-testi
 | Deletion behaviour                |   ❌    |       |
 | Status reporting & error messages |   ❌    |       |
 | Operation annotations             |   ❌    |       |
-| API stability policy              |   ❌    |       |
+| API stability policy              |   ✅    | v1alpha1 hub declared; policy documented in README |
 | Custom CA support                 |   ❌    |       |
 | Release artifacts (image + OCM)   |   ❌    |       |
 | Testing                           |   ❌    |       |
