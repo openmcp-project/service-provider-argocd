@@ -176,14 +176,16 @@ func (r *ArgoCDReconciler) Delete(ctx context.Context, obj *apiv1alpha1.ArgoCD, 
 	}
 
 	// Guard: refuse to delete while the user still has Applications.
-	applications, err := provisioner.CountUserApplications(ctx)
+	appsCount, err := provisioner.CountUserArgoCDResources(ctx)
 	if err != nil {
-		log.Error(err, "failed to list ArgoCD Applications")
+		log.Error(err, "failed to list ArgoCD resources")
 		argocd.StatusFailed(obj, reasonFailedToListApplications, err.Error())
 		return ctrl.Result{}, err
 	}
-	if applications > 0 {
-		serviceprovider.StatusTerminatingWithReason(obj, reasonTerminating, fmt.Sprintf("deletion blocked: %d ArgoCD Application(s) still present", applications))
+
+	// Guard: refuse to delete while the user still has ArgoCD resources.
+	if appsCount > 0 {
+		serviceprovider.StatusTerminatingWithReason(obj, reasonTerminating, "deletion blocked: ArgoCD CR(s) still present")
 		return ctrl.Result{RequeueAfter: requeueInterval}, nil
 	}
 
