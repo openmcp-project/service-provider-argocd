@@ -193,7 +193,7 @@ This uses the [openmcp-testing](https://github.com/openmcp-project/openmcp-testi
 | --------------------------------- | :----:  | ----- |
 | Deletion behaviour                |   ❌    |       |
 | Status reporting & error messages |   ❌    |       |
-| Operation annotations             |   ❌    |       |
+| Operation annotations             |   ✅    |       |
 | API stability policy              |   ✅    | v1alpha1 hub declared; policy documented in README |
 | Custom CA support                 |   ❌    |       |
 | Release artifacts (image + OCM)   |   ❌    |       |
