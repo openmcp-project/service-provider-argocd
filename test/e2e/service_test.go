@@ -265,12 +265,12 @@ func TestServiceProvider(t *testing.T) {
 		).
 		Assess(" “delete the test created domain resources and remove the generated app finalizer.",
 			func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-				onboardingCfg, err := clusterutils.OnboardingConfig()
+				mcpConfig, err := clusterutils.MCPConfig(ctx, c, mcpName)
 				if err != nil {
 					t.Error(err)
 					return ctx
 				}
-				if err := cleanupArgoCDResources(ctx, onboardingCfg); err != nil {
+				if err := cleanupArgoCDResources(ctx, mcpConfig); err != nil {
 					t.Fatalf("failed to delete ArgoCD resources: %v", err)
 				}
 				return ctx
