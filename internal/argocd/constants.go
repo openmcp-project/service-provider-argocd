@@ -57,3 +57,19 @@ var applicationListGVK = schema.GroupVersionKind{
 	Version: "v1alpha1",
 	Kind:    "ApplicationList",
 }
+
+// applicationSetListGVK identifies the ArgoCD ApplicationSet list kind.
+// It is used as a deletion guard so that user workloads are never orphaned.
+var applicationSetListGVK = schema.GroupVersionKind{
+	Group:   "argoproj.io",
+	Version: "v1alpha1",
+	Kind:    "ApplicationSetList",
+}
+
+// appProjectListGVK identifies the ArgoCD AppProject list kind.
+// It is used as a deletion guard so that user workloads are never orphaned.
+var appProjectListGVK = schema.GroupVersionKind{
+	Group:   "argoproj.io",
+	Version: "v1alpha1",
+	Kind:    "AppProjectList",
+}

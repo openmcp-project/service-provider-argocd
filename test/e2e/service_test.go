@@ -10,7 +10,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/utils/ptr"
 
 	"sigs.k8s.io/e2e-framework/klient/wait"
@@ -41,30 +40,9 @@ const (
 	// Stable Flux resource names for the Reloader addon; match internal/argocd/constants.go.
 	reloaderHelmReleaseName   = "argocd-reloader"
 	reloaderOCIRepositoryName = "argocd-reloader"
-)
 
-// newApplication returns a minimal but schema-valid ArgoCD Application used as
-// the domain object in the e2e tests.
-func newApplication() *unstructured.Unstructured {
-	obj := &unstructured.Unstructured{}
-	obj.SetName("test-domain-object")
-	obj.SetNamespace("argocd")
-	obj.SetAPIVersion("argoproj.io/v1alpha1")
-	obj.SetKind("Application")
-	obj.Object["spec"] = map[string]interface{}{
-		"project": "default",
-		"source": map[string]interface{}{
-			"repoURL":        "https://github.com/argoproj/argocd-example-apps.git",
-			"path":           "guestbook",
-			"targetRevision": "HEAD",
-		},
-		"destination": map[string]interface{}{
-			"server":    "https://kubernetes.default.svc",
-			"namespace": "default",
-		},
-	}
-	return obj
-}
+	expectedDeletionBlockedMessage = "deletion blocked: ArgoCD CR(s) still present"
+)
 
 // stableTenantNamespace returns the platform-cluster namespace where Flux
 // resources for the given ArgoCD CR live, using the same derivation as the
@@ -238,6 +216,14 @@ func TestServiceProvider(t *testing.T) {
 				if err := mcpConfig.Client().Resources().Create(ctx, domainObj); err != nil {
 					t.Errorf("failed to create domain object on controlplane: %v", err)
 				}
+				appSetObj := newApplicationSet()
+				if err := mcpConfig.Client().Resources().Create(ctx, appSetObj); err != nil {
+					t.Errorf("failed to create ApplicationSet on controlplane: %v", err)
+				}
+				appProjectObj := newAppProject()
+				if err := mcpConfig.Client().Resources().Create(ctx, appProjectObj); err != nil {
+					t.Errorf("failed to create AppProject on controlplane: %v", err)
+				}
 
 				return ctx
 			},
@@ -261,9 +247,15 @@ func TestServiceProvider(t *testing.T) {
 					if err := onboardingCfg.Client().Resources().Get(ctx, api.GetName(), api.GetNamespace(), api); err != nil {
 						return false, nil
 					}
-					if c := meta.FindStatusCondition(api.Status.Conditions, "Ready"); c != nil && c.Status == metav1.ConditionFalse && c.Reason == "Terminating" {
+					cond := meta.FindStatusCondition(api.Status.Conditions, "Ready")
+					if cond == nil {
+						return false, nil
+					}
+
+					if cond.Status == metav1.ConditionFalse && cond.Message == expectedDeletionBlockedMessage && cond.Reason == "Terminating" {
 						return true, nil
 					}
+
 					return false, nil
 				}); err != nil {
 					t.Errorf("expected deletion to be blocked with reason Terminating: %v", err)
@@ -271,16 +263,15 @@ func TestServiceProvider(t *testing.T) {
 				return ctx
 			},
 		).
-		Assess("delete domain object",
+		Assess(" “delete the test created domain resources and remove the generated app finalizer.",
 			func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				mcpConfig, err := clusterutils.MCPConfig(ctx, c, mcpName)
 				if err != nil {
 					t.Error(err)
 					return ctx
 				}
-				domainObj := newApplication()
-				if err := mcpConfig.Client().Resources().Delete(ctx, domainObj); err != nil {
-					t.Errorf("failed to delete domain object on controlplane: %v", err)
+				if err := cleanupArgoCDResources(ctx, mcpConfig); err != nil {
+					t.Fatalf("failed to delete ArgoCD resources: %v", err)
 				}
 				return ctx
 			},
