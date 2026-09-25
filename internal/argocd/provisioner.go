@@ -171,9 +171,8 @@ func (p *Provisioner) Uninstall(ctx context.Context) error {
 }
 
 // IsUninstalled reports whether all managed Flux resources have been fully
-// removed from the platform cluster. Both the ArgoCD and Reloader HelmReleases
-// must be gone before the ArgoCD CR finalizer is released, so neither Helm
-// release is orphaned on the MCP.
+// removed from the platform cluster. The ArgoCD and Reloader OCIRepositories and
+// HelmReleases must all be gone before the ArgoCD CR finalizer is released.
 func (p *Provisioner) IsUninstalled(ctx context.Context) (bool, error) {
 	hr := &helmv2.HelmRelease{}
 	err := p.platformClient.Get(ctx, client.ObjectKey{Name: helmReleaseName, Namespace: p.tenantNamespace}, hr)
@@ -183,6 +182,14 @@ func (p *Provisioner) IsUninstalled(ctx context.Context) (bool, error) {
 	case !apierrors.IsNotFound(err):
 		return false, fmt.Errorf("getting HelmRelease: %w", err)
 	}
+	repo := &sourcev1.OCIRepository{}
+	err = p.platformClient.Get(ctx, client.ObjectKey{Name: ociRepositoryName, Namespace: p.tenantNamespace}, repo)
+	switch {
+	case err == nil:
+		return false, nil
+	case !apierrors.IsNotFound(err):
+		return false, fmt.Errorf("getting OCIRepository: %w", err)
+	}
 
 	reloaderHR := &helmv2.HelmRelease{}
 	err = p.platformClient.Get(ctx, client.ObjectKey{Name: reloaderHelmReleaseName, Namespace: p.tenantNamespace}, reloaderHR)
@@ -191,6 +198,14 @@ func (p *Provisioner) IsUninstalled(ctx context.Context) (bool, error) {
 		return false, nil
 	case !apierrors.IsNotFound(err):
 		return false, fmt.Errorf("getting Reloader HelmRelease: %w", err)
+	}
+	reloaderRepo := &sourcev1.OCIRepository{}
+	err = p.platformClient.Get(ctx, client.ObjectKey{Name: reloaderOCIRepositoryName, Namespace: p.tenantNamespace}, reloaderRepo)
+	switch {
+	case err == nil:
+		return false, nil
+	case !apierrors.IsNotFound(err):
+		return false, fmt.Errorf("getting Reloader OCIRepository: %w", err)
 	}
 
 	return true, nil

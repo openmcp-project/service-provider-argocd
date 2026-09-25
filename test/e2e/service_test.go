@@ -245,19 +245,26 @@ func TestServiceProvider(t *testing.T) {
 					return ctx
 				}
 
-				// Give the controller a window to (not) react.
-				time.Sleep(20 * time.Second)
-				if err := onboardingCfg.Client().Resources().Get(ctx, mcpName, "default", api); err != nil {
-					t.Errorf("failed to re-read ArgoCD: %v", err)
-					return ctx
-				}
-				if cond := meta.FindStatusCondition(api.Status.Conditions, "Ready"); cond == nil {
-					t.Error("Ready condition disappeared while the resource was ignored")
-				} else if cond.Reason == statusReasonInvalidVersion {
-					t.Errorf("controller acted on an ignored resource: Ready reason is %q", cond.Reason)
-				}
-				if _, present := api.GetAnnotations()[openmcpconsts.OperationAnnotation]; !present {
-					t.Error("ignore annotation was removed; the controller must not modify an ignored resource")
+				deadline := time.Now().Add(30 * time.Second)
+				for time.Now().Before(deadline) {
+					time.Sleep(2 * time.Second)
+					if err := onboardingCfg.Client().Resources().Get(ctx, mcpName, "default", api); err != nil {
+						t.Errorf("failed to re-read ArgoCD: %v", err)
+						return ctx
+					}
+					cond := meta.FindStatusCondition(api.Status.Conditions, "Ready")
+					if cond == nil {
+						t.Error("Ready condition disappeared while the resource was ignored")
+						return ctx
+					}
+					if cond.Reason == statusReasonInvalidVersion {
+						t.Errorf("controller acted on an ignored resource: Ready reason is %q", cond.Reason)
+						return ctx
+					}
+					if _, present := api.GetAnnotations()[openmcpconsts.OperationAnnotation]; !present {
+						t.Error("ignore annotation was removed; the controller must not modify an ignored resource")
+						return ctx
+					}
 				}
 
 				// Cleanup: drop the ignore annotation and restore a valid version so
