@@ -24,14 +24,15 @@ type ExposureValues struct {
 }
 
 // buildValues merges the operator-supplied chart values with the exposure
-// fragment derived from the ArgoCD request. Precedence is:
+// fragment derived from the ArgoCD request and, when a custom CA is provided,
+// injects it into ArgoCD's trusted-certificate configuration. Precedence is:
 //
-//	chart defaults  <  operator values (version.Values)  <  exposure fragment
+//	chart defaults  <  operator values (version.Values)  <  exposure fragment  <  CA fragment
 //
 // so that platform-provided values cannot silently drop the annotations that
 // exposure depends on. A nil result means "no values", which is a valid input
 // for a HelmRelease.
-func buildValues(base *apiextensionsv1.JSON, exposure ExposureValues) (*apiextensionsv1.JSON, error) {
+func buildValues(base *apiextensionsv1.JSON, exposure ExposureValues, caCert string) (*apiextensionsv1.JSON, error) {
 	values := map[string]any{}
 	if base != nil && len(base.Raw) > 0 {
 		if err := json.Unmarshal(base.Raw, &values); err != nil {
@@ -41,6 +42,10 @@ func buildValues(base *apiextensionsv1.JSON, exposure ExposureValues) (*apiexten
 
 	if exposure.Enabled {
 		deepMerge(values, exposureFragment(exposure))
+	}
+
+	if caCert != "" {
+		deepMerge(values, caBundleFragment(caCert))
 	}
 
 	if len(values) == 0 {
@@ -123,5 +128,21 @@ func deepMerge(dst, src map[string]any) {
 			}
 		}
 		dst[key] = srcVal
+	}
+}
+
+// caBundleFragment renders the ArgoCD Helm values that inject the custom CA
+// bundle into ArgoCD's trusted-certificate configuration. This populates the
+// argocd-tls-certs-cm ConfigMap that ArgoCD reads when connecting to Git
+// repositories and other TLS endpoints.
+func caBundleFragment(caCert string) map[string]any {
+	return map[string]any{
+		"configs": map[string]any{
+			"tls": map[string]any{
+				"certificates": map[string]any{
+					"custom-ca.crt": caCert,
+				},
+			},
+		},
 	}
 }

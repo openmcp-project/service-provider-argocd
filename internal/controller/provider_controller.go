@@ -223,14 +223,16 @@ func (r *ArgoCDReconciler) newProvisioner(obj *apiv1alpha1.ArgoCD, pc *apiv1alph
 	}
 
 	return argocd.NewProvisioner(argocd.ProvisionerConfig{
-		PlatformClient:       r.PlatformCluster.Client(),
-		MCPClient:            clusterCtx.MCPCluster.Client(),
-		TenantNamespace:      tenantNamespace,
-		MCPNamespace:         providerNamespace(obj),
-		KubeConfigSecretName: clusterCtx.MCPAccessSecretKey.Name,
-		PollInterval:         pc.PollInterval(),
-		Exposure:             resolveExposure(obj, pc, clusterCtx.MCPCluster.APIServerEndpoint()),
-		Reloader:             resolveReloader(pc),
+		PlatformClient:          r.PlatformCluster.Client(),
+		MCPClient:               clusterCtx.MCPCluster.Client(),
+		TenantNamespace:         tenantNamespace,
+		MCPNamespace:            providerNamespace(obj),
+		KubeConfigSecretName:    clusterCtx.MCPAccessSecretKey.Name,
+		PollInterval:            pc.PollInterval(),
+		Exposure:                resolveExposure(obj, pc, clusterCtx.MCPCluster.APIServerEndpoint()),
+		Reloader:                resolveReloader(pc),
+		CABundleSecret:          pc.CABundleSecret(),
+		CABundleSourceNamespace: r.PodNamespace,
 	}), nil
 }
 
