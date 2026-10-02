@@ -198,7 +198,7 @@ This uses the [openmcp-testing](https://github.com/openmcp-project/openmcp-testi
 | Custom CA support                 |   ❌    |       |
 | Release artifacts (image + OCM)   |   ❌    |       |
 | Testing                           |   ✅    | Full lifecycle tested via openmcp-testing framework (e2e tests) and validated on Gardener clusters |
-| Ownership and maintenance docs    |   ❌    |       |
+| Ownership and maintenance docs    |   ✅    | Maintainers listed in `.github/CODEOWNERS`; contribution and issue reporting documented in README |
 
 See the [OpenControlPlane Quality Criteria](https://open-control-plane.io/developers/serviceprovider/quality-criteria) for definitions.
 
