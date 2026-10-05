@@ -195,7 +195,7 @@ This uses the [openmcp-testing](https://github.com/openmcp-project/openmcp-testi
 | Status reporting & error messages |   ✅    |       |
 | Operation annotations             |   ✅    |       |
 | API stability policy              |   ✅    | v1alpha1 hub declared; policy documented in README |
-| Custom CA support                 |   ❌    |       |
+| Custom CA support                 |   ✅    | `spec.caBundleSecret` syncs the CA into tenant namespaces and injects it into Flux OCIRepositories and ArgoCD's trusted-certificate Helm values |
 | Release artifacts (image + OCM)   |   ✅    |       |
 | Testing                           |   ✅    | Full lifecycle tested via openmcp-testing framework (e2e tests) and validated on Gardener clusters |
 | Ownership and maintenance docs    |   ✅    | Maintainers listed in `.github/CODEOWNERS`; contribution and issue reporting documented in README |
