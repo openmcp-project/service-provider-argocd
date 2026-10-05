@@ -155,6 +155,128 @@ func TestEnsureCABundle_MissingCACrtKey(t *testing.T) {
 	}
 }
 
+// ── applyOCIRepository ────────────────────────────────────────────────────────
+
+func TestApplyOCIRepository_SetsCertSecretRef(t *testing.T) {
+	fc := fake.NewClientBuilder().WithScheme(newScheme(t)).Build()
+	p := newTestProvisioner(fc, testCASecret)
+
+	chartURL := "oci://example.com/charts/argocd"
+	version := apiv1alpha1.ArgoCDVersion{
+		Version:      "v1.0.0",
+		ChartVersion: "1.0.0",
+		ChartURL:     &chartURL,
+	}
+
+	if err := p.applyOCIRepository(context.Background(), version); err != nil {
+		t.Fatalf("applyOCIRepository: %v", err)
+	}
+
+	repo := &sourcev1.OCIRepository{}
+	if err := fc.Get(context.Background(), client.ObjectKey{
+		Name:      ociRepositoryName,
+		Namespace: testTenantNS,
+	}, repo); err != nil {
+		t.Fatalf("get OCIRepository: %v", err)
+	}
+	if repo.Spec.CertSecretRef == nil {
+		t.Fatal("expected CertSecretRef to be set, got nil")
+	}
+	if repo.Spec.CertSecretRef.Name != testCASecret {
+		t.Fatalf("CertSecretRef.Name = %q, want %q", repo.Spec.CertSecretRef.Name, testCASecret)
+	}
+}
+
+func TestApplyOCIRepository_NoCertSecretRefWhenNoCA(t *testing.T) {
+	fc := fake.NewClientBuilder().WithScheme(newScheme(t)).Build()
+	p := newTestProvisioner(fc, "")
+
+	chartURL := "oci://example.com/charts/argocd"
+	version := apiv1alpha1.ArgoCDVersion{
+		Version:      "v1.0.0",
+		ChartVersion: "1.0.0",
+		ChartURL:     &chartURL,
+	}
+
+	if err := p.applyOCIRepository(context.Background(), version); err != nil {
+		t.Fatalf("applyOCIRepository: %v", err)
+	}
+
+	repo := &sourcev1.OCIRepository{}
+	if err := fc.Get(context.Background(), client.ObjectKey{
+		Name:      ociRepositoryName,
+		Namespace: testTenantNS,
+	}, repo); err != nil {
+		t.Fatalf("get OCIRepository: %v", err)
+	}
+	if repo.Spec.CertSecretRef != nil {
+		t.Fatalf("expected CertSecretRef to be nil when no CA configured, got %+v", repo.Spec.CertSecretRef)
+	}
+}
+
+func TestApplyReloaderOCIRepository_SetsCertSecretRef(t *testing.T) {
+	fc := fake.NewClientBuilder().WithScheme(newScheme(t)).Build()
+
+	reloaderChartURL := "oci://example.com/charts/reloader"
+	p := NewProvisioner(ProvisionerConfig{
+		PlatformClient:          fc,
+		TenantNamespace:         testTenantNS,
+		CABundleSecret:          testCASecret,
+		CABundleSourceNamespace: testProviderNS,
+		Reloader: &apiv1alpha1.ReloaderConfig{
+			ChartURL:     reloaderChartURL,
+			ChartVersion: "1.0.0",
+		},
+	})
+
+	if err := p.applyReloaderOCIRepository(context.Background()); err != nil {
+		t.Fatalf("applyReloaderOCIRepository: %v", err)
+	}
+
+	repo := &sourcev1.OCIRepository{}
+	if err := fc.Get(context.Background(), client.ObjectKey{
+		Name:      reloaderOCIRepositoryName,
+		Namespace: testTenantNS,
+	}, repo); err != nil {
+		t.Fatalf("get Reloader OCIRepository: %v", err)
+	}
+	if repo.Spec.CertSecretRef == nil {
+		t.Fatal("expected CertSecretRef to be set on Reloader OCIRepository, got nil")
+	}
+	if repo.Spec.CertSecretRef.Name != testCASecret {
+		t.Fatalf("CertSecretRef.Name = %q, want %q", repo.Spec.CertSecretRef.Name, testCASecret)
+	}
+}
+
+func TestApplyReloaderOCIRepository_NoCertSecretRefWhenNoCA(t *testing.T) {
+	fc := fake.NewClientBuilder().WithScheme(newScheme(t)).Build()
+
+	reloaderChartURL := "oci://example.com/charts/reloader"
+	p := NewProvisioner(ProvisionerConfig{
+		PlatformClient:  fc,
+		TenantNamespace: testTenantNS,
+		Reloader: &apiv1alpha1.ReloaderConfig{
+			ChartURL:     reloaderChartURL,
+			ChartVersion: "1.0.0",
+		},
+	})
+
+	if err := p.applyReloaderOCIRepository(context.Background()); err != nil {
+		t.Fatalf("applyReloaderOCIRepository: %v", err)
+	}
+
+	repo := &sourcev1.OCIRepository{}
+	if err := fc.Get(context.Background(), client.ObjectKey{
+		Name:      reloaderOCIRepositoryName,
+		Namespace: testTenantNS,
+	}, repo); err != nil {
+		t.Fatalf("get Reloader OCIRepository: %v", err)
+	}
+	if repo.Spec.CertSecretRef != nil {
+		t.Fatalf("expected CertSecretRef to be nil when no CA configured, got %+v", repo.Spec.CertSecretRef)
+	}
+}
+
 // ── removeCABundle ────────────────────────────────────────────────────────────
 
 func TestRemoveCABundle_Noop(t *testing.T) {
