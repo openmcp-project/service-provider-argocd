@@ -35,6 +35,10 @@ const (
 	caTestMCPName = "test-ca"
 	caSecretName  = "test-ca-bundle"
 
+	// caTestHost is embedded as a DNS SAN in the generated test CA so the
+	// provisioner keys argocd-tls-certs-cm by this hostname.
+	caTestHost = "git.test.local"
+
 	// Mirror of internal/argocd constants; re-declared here to avoid an import cycle.
 	caTestManagedByLabel = "app.kubernetes.io/managed-by"
 	caTestManagedByValue = "service-provider-argocd"
@@ -51,6 +55,7 @@ func generateTestCACert(t *testing.T) string {
 	tmpl := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
 		Subject:               pkix.Name{CommonName: "test-ca"},
+		DNSNames:              []string{caTestHost},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(24 * time.Hour),
 		IsCA:                  true,
@@ -104,8 +109,8 @@ func upsertCAProviderConfig(ctx context.Context, t *testing.T, c *envconf.Config
 //  1. The ArgoCD CR reaches Ready (provisioning succeeds with a CA configured).
 //  2. The CA Secret is synced into the tenant namespace with the managed-by label.
 //  3. The ArgoCD OCIRepository carries certSecretRef pointing at the synced secret.
-//  4. The ArgoCD HelmRelease values contain the CA cert at
-//     configs.tls.certificates["custom-ca.crt"].
+//  4. The ArgoCD HelmRelease values contain the CA cert keyed by the hostname
+//     extracted from the certificate's DNS SAN (configs.tls.certificates[host]).
 func TestCustomCA(t *testing.T) {
 	// Generate a real self-signed CA cert at test time so Flux can parse it.
 	caPEM := generateTestCACert(t)
@@ -226,9 +231,9 @@ func TestCustomCA(t *testing.T) {
 					return ctx
 				}
 
-				got, err := caNestedString(vals, "configs", "tls", "certificates", "custom-ca.crt")
+				got, err := caNestedString(vals, "configs", "tls", "certificates", caTestHost)
 				if err != nil {
-					t.Errorf("configs.tls.certificates[\"custom-ca.crt\"] not found in HelmRelease values: %v", err)
+					t.Errorf("configs.tls.certificates[%q] not found in HelmRelease values: %v", caTestHost, err)
 					return ctx
 				}
 				if got != caPEM {

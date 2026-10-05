@@ -102,8 +102,8 @@ func (p *Provisioner) Install(ctx context.Context, version apiv1alpha1.ArgoCDVer
 		return fmt.Errorf("version %q is missing a chart URL", version.Version)
 	}
 
-	if err := p.ensureCABundle(ctx); err != nil {
-		return fmt.Errorf("ensuring CA bundle: %w", err)
+	if err := p.reconcileCABundle(ctx); err != nil {
+		return fmt.Errorf("reconciling CA bundle: %w", err)
 	}
 	if err := p.applyOCIRepository(ctx, version); err != nil {
 		return fmt.Errorf("reconciling OCIRepository: %w", err)
@@ -430,6 +430,16 @@ func setManagedByValue(obj client.Object, value string) {
 	obj.SetLabels(labels)
 }
 
+// reconcileCABundle syncs the CA bundle Secret when caBundleSecret is set, or
+// removes any previously synced copy when it has been cleared. It is the single
+// CA entry point called from Install.
+func (p *Provisioner) reconcileCABundle(ctx context.Context) error {
+	if p.caBundleSecret != "" {
+		return p.ensureCABundle(ctx)
+	}
+	return p.removeCABundle(ctx)
+}
+
 // ensureCABundle reads the CA bundle Secret from the service provider namespace
 // and copies it into the tenant namespace so that Flux OCIRepository resources
 // can reference it via CertSecretRef (which requires a LocalObjectReference).
@@ -456,6 +466,10 @@ func (p *Provisioner) ensureCABundle(ctx context.Context) error {
 	}
 	if _, err := controllerutil.CreateOrUpdate(ctx, p.platformClient, dst, func() error {
 		setManagedByValue(dst, managedByArgoCDValue)
+		if dst.Labels == nil {
+			dst.Labels = map[string]string{}
+		}
+		dst.Labels[caBundleLabel] = "true"
 		dst.Data = src.Data
 		dst.Type = src.Type
 		return nil
@@ -471,14 +485,31 @@ func (p *Provisioner) ensureCABundle(ctx context.Context) error {
 // namespace. It is a no-op when no CA bundle is configured or the secret no
 // longer exists.
 func (p *Provisioner) removeCABundle(ctx context.Context) error {
-	if p.caBundleSecret == "" {
-		return nil
+	if p.caBundleSecret != "" {
+		// Fast path: name is known, delete directly.
+		s := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      p.caBundleSecret,
+				Namespace: p.tenantNamespace,
+			},
+		}
+		return client.IgnoreNotFound(p.platformClient.Delete(ctx, s))
 	}
-	s := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      p.caBundleSecret,
-			Namespace: p.tenantNamespace,
-		},
+
+	// caBundleSecret was cleared from the ProviderConfig after a secret had
+	// already been synced. Find the orphaned copy by the label stamped on it at
+	// creation time and delete it.
+	list := &corev1.SecretList{}
+	if err := p.platformClient.List(ctx, list,
+		client.InNamespace(p.tenantNamespace),
+		client.MatchingLabels{caBundleLabel: "true"},
+	); err != nil {
+		return fmt.Errorf("listing CA bundle secrets in tenant namespace %q: %w", p.tenantNamespace, err)
 	}
-	return client.IgnoreNotFound(p.platformClient.Delete(ctx, s))
+	for i := range list.Items {
+		if err := client.IgnoreNotFound(p.platformClient.Delete(ctx, &list.Items[i])); err != nil {
+			return fmt.Errorf("deleting CA bundle secret %q: %w", list.Items[i].Name, err)
+		}
+	}
+	return nil
 }

@@ -49,8 +49,6 @@ func caSecret(name, namespace, cert string) *corev1.Secret {
 
 // newProvisioner builds a minimal Provisioner backed by a fake client.
 func newTestProvisioner(fakeClient client.Client, caBundleSecret string) *Provisioner {
-	chartURL := "oci://example.com/charts/argocd"
-	_ = apiv1alpha1.ArgoCDVersion{ChartURL: &chartURL} // ensure type is imported
 	return NewProvisioner(ProvisionerConfig{
 		PlatformClient:          fakeClient,
 		TenantNamespace:         testTenantNS,

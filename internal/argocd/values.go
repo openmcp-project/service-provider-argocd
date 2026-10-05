@@ -1,8 +1,11 @@
 package argocd
 
 import (
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -45,7 +48,11 @@ func buildValues(base *apiextensionsv1.JSON, exposure ExposureValues, caCert str
 	}
 
 	if caCert != "" {
-		deepMerge(values, caBundleFragment(caCert))
+		fragment, err := caBundleFragment(caCert)
+		if err != nil {
+			return nil, fmt.Errorf("building CA bundle values: %w", err)
+		}
+		deepMerge(values, fragment)
 	}
 
 	if len(values) == 0 {
@@ -133,16 +140,109 @@ func deepMerge(dst, src map[string]any) {
 
 // caBundleFragment renders the ArgoCD Helm values that inject the custom CA
 // bundle into ArgoCD's trusted-certificate configuration. This populates the
-// argocd-tls-certs-cm ConfigMap that ArgoCD reads when connecting to Git
-// repositories and other TLS endpoints.
-func caBundleFragment(caCert string) map[string]any {
+// argocd-tls-certs-cm ConfigMap that ArgoCD's repo-server reads when connecting
+// to Git repositories and other TLS endpoints.
+//
+// ArgoCD keys that ConfigMap by the server hostname: when it connects to
+// https://<host>, it trusts the certificate stored under the key <host>. The
+// hostnames are therefore extracted from the provided certificate's DNS SANs
+// (or, when it carries none, its Common Name). The convention is that the
+// platform team embeds the target Git/registry hostnames as SANs on the CA
+// bundle so the trust anchor is wired to exactly those endpoints.
+func caBundleFragment(caCert string) (map[string]any, error) {
+	hosts, err := certHostnames(caCert)
+	if err != nil {
+		return nil, err
+	}
+
+	certificates := make(map[string]any, len(hosts))
+	for _, host := range hosts {
+		certificates[host] = caCert
+	}
+
 	return map[string]any{
 		"configs": map[string]any{
 			"tls": map[string]any{
-				"certificates": map[string]any{
-					"custom-ca.crt": caCert,
-				},
+				"certificates": certificates,
 			},
 		},
+	}, nil
+}
+
+// hostKeyPattern matches a hostname that is also a valid ConfigMap data key
+// (RFC 1123 labels joined by dots). Wildcards and other characters that ArgoCD
+// could never match against a concrete connection host are rejected.
+var hostKeyPattern = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*$`)
+
+// isValidHostKey reports whether host can be used as an argocd-tls-certs-cm key.
+func isValidHostKey(host string) bool {
+	if host == "" || len(host) > 253 {
+		return false
 	}
+	return hostKeyPattern.MatchString(host)
+}
+
+// certHostnames parses one or more PEM-encoded certificates and returns the
+// hostnames to key the trusted-certificate ConfigMap by. DNS SANs across all
+// certificates in the bundle are preferred; when none are present it falls back
+// to the first certificate's Common Name. It returns an error when the input
+// cannot be parsed or yields no usable hostname.
+func certHostnames(caCert string) ([]string, error) {
+	certs, err := parseCertificates(caCert)
+	if err != nil {
+		return nil, err
+	}
+
+	hosts := collectDNSHosts(certs)
+	if len(hosts) == 0 {
+		if cn := certs[0].Subject.CommonName; isValidHostKey(cn) {
+			hosts = append(hosts, cn)
+		}
+	}
+	if len(hosts) == 0 {
+		return nil, fmt.Errorf("certificate has no DNS SAN and no usable common name to key argocd-tls-certs-cm by hostname")
+	}
+	return hosts, nil
+}
+
+// parseCertificates decodes every CERTIFICATE block in a PEM bundle. It errors
+// if a block fails to parse or if the bundle contains no certificate.
+func parseCertificates(caCert string) ([]*x509.Certificate, error) {
+	var certs []*x509.Certificate
+	rest := []byte(caCert)
+	for {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		if block.Type != "CERTIFICATE" {
+			continue
+		}
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("parsing certificate: %w", err)
+		}
+		certs = append(certs, cert)
+	}
+	if len(certs) == 0 {
+		return nil, fmt.Errorf("no PEM certificate block found in CA bundle")
+	}
+	return certs, nil
+}
+
+// collectDNSHosts returns the deduplicated, ConfigMap-key-safe DNS SANs across
+// all certificates, preserving first-seen order.
+func collectDNSHosts(certs []*x509.Certificate) []string {
+	var hosts []string
+	seen := map[string]bool{}
+	for _, cert := range certs {
+		for _, dns := range cert.DNSNames {
+			if isValidHostKey(dns) && !seen[dns] {
+				seen[dns] = true
+				hosts = append(hosts, dns)
+			}
+		}
+	}
+	return hosts
 }
