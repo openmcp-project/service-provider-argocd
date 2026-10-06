@@ -3,7 +3,7 @@ module github.com/openmcp-project/service-provider-argocd
 go 1.27.1
 
 require (
-	github.com/fluxcd/helm-controller/api v1.6.4
+	github.com/fluxcd/helm-controller/api v1.6.5
 	github.com/fluxcd/pkg/apis/meta v1.32.0
 	github.com/fluxcd/pkg/runtime v0.115.0
 	github.com/fluxcd/source-controller/api v1.9.5
