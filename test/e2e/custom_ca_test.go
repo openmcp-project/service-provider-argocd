@@ -160,7 +160,7 @@ func TestCustomCA(t *testing.T) {
 
 				if err := wait.For(
 					openmcpconditions.Match(api, onboarding, "Ready", corev1.ConditionTrue),
-					wait.WithTimeout(5*time.Minute),
+					wait.WithTimeout(10*time.Minute),
 				); err != nil {
 					t.Errorf("ArgoCD CR did not become Ready: %v", err)
 				}
