@@ -11,6 +11,7 @@ import (
 	fluxmeta "github.com/fluxcd/pkg/apis/meta"
 	"github.com/fluxcd/pkg/runtime/conditions"
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -47,18 +48,31 @@ type Provisioner struct {
 	// ArgoCD. Reloader is best-effort: its failures are logged but never
 	// returned as Install errors.
 	reloader *apiv1alpha1.ReloaderConfig
+	// caBundleSecret is the name of the Secret holding the custom CA bundle.
+	// It is copied from caBundleSourceNamespace into tenantNamespace so that
+	// Flux OCIRepository resources can reference it via CertSecretRef.
+	caBundleSecret string
+	// caBundleSourceNamespace is the namespace (the service provider's pod
+	// namespace) where the CA bundle Secret lives before being synced.
+	caBundleSourceNamespace string
+	// caCert holds the PEM-encoded CA certificate read from the CA bundle
+	// Secret. It is populated by ensureCABundle and consumed by applyHelmRelease
+	// to inject the CA into ArgoCD's trusted-certificate configuration.
+	caCert string
 }
 
 // ProvisionerConfig groups the inputs required to build a Provisioner.
 type ProvisionerConfig struct {
-	PlatformClient       client.Client
-	MCPClient            client.Client
-	TenantNamespace      string
-	MCPNamespace         string
-	KubeConfigSecretName string
-	PollInterval         time.Duration
-	Exposure             ExposureValues
-	Reloader             *apiv1alpha1.ReloaderConfig
+	PlatformClient          client.Client
+	MCPClient               client.Client
+	TenantNamespace         string
+	MCPNamespace            string
+	KubeConfigSecretName    string
+	PollInterval            time.Duration
+	Exposure                ExposureValues
+	Reloader                *apiv1alpha1.ReloaderConfig
+	CABundleSecret          string
+	CABundleSourceNamespace string
 }
 
 // NewProvisioner constructs a Provisioner, applying the default target
@@ -68,14 +82,16 @@ func NewProvisioner(cfg ProvisionerConfig) *Provisioner {
 		cfg.MCPNamespace = DefaultNamespace
 	}
 	return &Provisioner{
-		platformClient:       cfg.PlatformClient,
-		mcpClient:            cfg.MCPClient,
-		tenantNamespace:      cfg.TenantNamespace,
-		mcpNamespace:         cfg.MCPNamespace,
-		kubeConfigSecretName: cfg.KubeConfigSecretName,
-		pollInterval:         cfg.PollInterval,
-		exposure:             cfg.Exposure,
-		reloader:             cfg.Reloader,
+		platformClient:          cfg.PlatformClient,
+		mcpClient:               cfg.MCPClient,
+		tenantNamespace:         cfg.TenantNamespace,
+		mcpNamespace:            cfg.MCPNamespace,
+		kubeConfigSecretName:    cfg.KubeConfigSecretName,
+		pollInterval:            cfg.PollInterval,
+		exposure:                cfg.Exposure,
+		reloader:                cfg.Reloader,
+		caBundleSecret:          cfg.CABundleSecret,
+		caBundleSourceNamespace: cfg.CABundleSourceNamespace,
 	}
 }
 
@@ -86,6 +102,9 @@ func (p *Provisioner) Install(ctx context.Context, version apiv1alpha1.ArgoCDVer
 		return fmt.Errorf("version %q is missing a chart URL", version.Version)
 	}
 
+	if err := p.reconcileCABundle(ctx); err != nil {
+		return fmt.Errorf("reconciling CA bundle: %w", err)
+	}
 	if err := p.applyOCIRepository(ctx, version); err != nil {
 		return fmt.Errorf("reconciling OCIRepository: %w", err)
 	}
@@ -169,7 +188,10 @@ func (p *Provisioner) Uninstall(ctx context.Context) error {
 		return fmt.Errorf("deleting OCIRepository: %w", err)
 	}
 
-	return p.removeReloaderResources(ctx)
+	if err := p.removeReloaderResources(ctx); err != nil {
+		return err
+	}
+	return p.removeCABundle(ctx)
 }
 
 // IsUninstalled reports whether all managed Flux resources have been fully
@@ -269,6 +291,9 @@ func (p *Provisioner) applyOCIRepository(ctx context.Context, version apiv1alpha
 		if version.ChartPullSecret != "" {
 			repo.Spec.SecretRef = &fluxmeta.LocalObjectReference{Name: version.ChartPullSecret}
 		}
+		if p.caBundleSecret != "" {
+			repo.Spec.CertSecretRef = &fluxmeta.LocalObjectReference{Name: p.caBundleSecret}
+		}
 		return nil
 	})
 	return err
@@ -280,7 +305,7 @@ func (p *Provisioner) applyHelmRelease(ctx context.Context, version apiv1alpha1.
 	hr := &helmv2.HelmRelease{
 		ObjectMeta: metav1.ObjectMeta{Name: helmReleaseName, Namespace: p.tenantNamespace},
 	}
-	values, err := buildValues(version.Values, p.exposure)
+	values, err := buildValues(version.Values, p.exposure, p.caCert)
 	if err != nil {
 		return fmt.Errorf("building Helm values: %w", err)
 	}
@@ -342,6 +367,9 @@ func (p *Provisioner) applyReloaderOCIRepository(ctx context.Context) error {
 		if p.reloader.ChartPullSecret != "" {
 			repo.Spec.SecretRef = &fluxmeta.LocalObjectReference{Name: p.reloader.ChartPullSecret}
 		}
+		if p.caBundleSecret != "" {
+			repo.Spec.CertSecretRef = &fluxmeta.LocalObjectReference{Name: p.caBundleSecret}
+		}
 		return nil
 	})
 	return err
@@ -400,4 +428,88 @@ func setManagedByValue(obj client.Object, value string) {
 	}
 	labels[managedByLabel] = value
 	obj.SetLabels(labels)
+}
+
+// reconcileCABundle syncs the CA bundle Secret when caBundleSecret is set, or
+// removes any previously synced copy when it has been cleared. It is the single
+// CA entry point called from Install.
+func (p *Provisioner) reconcileCABundle(ctx context.Context) error {
+	if p.caBundleSecret != "" {
+		return p.ensureCABundle(ctx)
+	}
+	return p.removeCABundle(ctx)
+}
+
+// ensureCABundle reads the CA bundle Secret from the service provider namespace
+// and copies it into the tenant namespace so that Flux OCIRepository resources
+// can reference it via CertSecretRef (which requires a LocalObjectReference).
+// It also populates p.caCert with the raw PEM content for injection into
+// ArgoCD Helm values. It is a no-op when no CA bundle is configured.
+func (p *Provisioner) ensureCABundle(ctx context.Context) error {
+	if p.caBundleSecret == "" {
+		return nil
+	}
+
+	src := &corev1.Secret{}
+	if err := p.platformClient.Get(ctx, client.ObjectKey{
+		Name:      p.caBundleSecret,
+		Namespace: p.caBundleSourceNamespace,
+	}, src); err != nil {
+		return fmt.Errorf("reading CA bundle secret %q from namespace %q: %w", p.caBundleSecret, p.caBundleSourceNamespace, err)
+	}
+
+	dst := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      p.caBundleSecret,
+			Namespace: p.tenantNamespace,
+		},
+	}
+	if _, err := controllerutil.CreateOrUpdate(ctx, p.platformClient, dst, func() error {
+		setManagedByValue(dst, managedByArgoCDValue)
+		if dst.Labels == nil {
+			dst.Labels = map[string]string{}
+		}
+		dst.Labels[caBundleLabel] = "true"
+		dst.Data = src.Data
+		dst.Type = src.Type
+		return nil
+	}); err != nil {
+		return fmt.Errorf("syncing CA bundle secret to tenant namespace %q: %w", p.tenantNamespace, err)
+	}
+
+	p.caCert = string(src.Data["ca.crt"])
+	return nil
+}
+
+// removeCABundle deletes the CA bundle Secret that was synced into the tenant
+// namespace. It is a no-op when no CA bundle is configured or the secret no
+// longer exists.
+func (p *Provisioner) removeCABundle(ctx context.Context) error {
+	if p.caBundleSecret != "" {
+		// Fast path: name is known, delete directly.
+		s := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      p.caBundleSecret,
+				Namespace: p.tenantNamespace,
+			},
+		}
+		return client.IgnoreNotFound(p.platformClient.Delete(ctx, s))
+	}
+
+	// caBundleSecret was cleared from the ProviderConfig after a secret had
+	// already been synced. Find the orphaned copy by the label stamped on it at
+	// creation time and delete it.
+	list := &corev1.SecretList{}
+	if err := p.platformClient.List(ctx, list,
+		client.InNamespace(p.tenantNamespace),
+		client.MatchingLabels{caBundleLabel: "true"},
+	); err != nil {
+		return fmt.Errorf("listing CA bundle secrets in tenant namespace %q: %w", p.tenantNamespace, err)
+	}
+	for i := range list.Items {
+		if err := client.IgnoreNotFound(p.platformClient.Delete(ctx, &list.Items[i])); err != nil {
+			return fmt.Errorf("deleting CA bundle secret %q: %w", list.Items[i].Name, err)
+		}
+	}
+	return nil
 }

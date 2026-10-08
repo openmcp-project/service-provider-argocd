@@ -48,6 +48,11 @@ const (
 	// watch never sees Reloader HelmRelease failures and never cascades them into
 	// ArgoCD CR deletion.
 	managedByReloaderValue = "service-provider-argocd-reloader"
+
+	// caBundleLabel is stamped on Secrets synced into tenant namespaces by
+	// ensureCABundle. It allows removeCABundle to find and delete the secret
+	// by label when caBundleSecret has been cleared from the ProviderConfig.
+	caBundleLabel = "argocd.services.open-control-plane.io/ca-bundle"
 )
 
 // applicationListGVK identifies the ArgoCD Application list kind. It is used as

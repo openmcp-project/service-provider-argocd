@@ -41,6 +41,15 @@ spec:
           spec:
             description: spec defines the desired state of ProviderConfig
             properties:
+              caBundleSecret:
+                description: |-
+                  CABundleSecret optionally names a Secret in the service provider's
+                  namespace containing a PEM-encoded CA bundle under the key "ca.crt".
+                  When set, the bundle is propagated to all Flux OCIRepository resources
+                  (so that chart pulls from private registries succeed) and injected into
+                  ArgoCD's trusted-certificate configuration so that ArgoCD can reach Git
+                  hosts and other services that use a private certificate authority.
+                type: string
               exposure:
                 description: |-
                   Exposure defines platform-level policy applied when a tenant requests

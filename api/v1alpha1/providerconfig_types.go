@@ -54,6 +54,15 @@ type ProviderConfigSpec struct {
 	// logged but never affect the lifecycle of the ArgoCD CR.
 	// +optional
 	Reloader *ReloaderConfig `json:"reloader,omitempty"`
+
+	// CABundleSecret optionally names a Secret in the service provider's
+	// namespace containing a PEM-encoded CA bundle under the key "ca.crt".
+	// When set, the bundle is propagated to all Flux OCIRepository resources
+	// (so that chart pulls from private registries succeed) and injected into
+	// ArgoCD's trusted-certificate configuration so that ArgoCD can reach Git
+	// hosts and other services that use a private certificate authority.
+	// +optional
+	CABundleSecret string `json:"caBundleSecret,omitempty"`
 }
 
 // ReloaderConfig describes the Stakater Reloader Helm chart to install
@@ -257,4 +266,13 @@ func (o *ProviderConfig) ReloaderConfig() (ReloaderConfig, bool) {
 		cfg.ChartURL = DefaultReloaderChartURL
 	}
 	return cfg, true
+}
+
+// CABundleSecret returns the name of the Secret holding the custom CA bundle,
+// or an empty string when no custom CA is configured.
+func (o *ProviderConfig) CABundleSecret() string {
+	if o == nil {
+		return ""
+	}
+	return o.Spec.CABundleSecret
 }
