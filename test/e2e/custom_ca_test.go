@@ -264,6 +264,14 @@ func TestCustomCA(t *testing.T) {
 			); err != nil {
 				t.Logf("teardown: ArgoCD CR not fully deleted within timeout: %v", err)
 			}
+
+			// Delete the ProviderConfig so subsequent tests (e.g. TestServiceProvider)
+			// can create it fresh with their own full configuration.
+			cfg := &apiv1alpha1.ProviderConfig{}
+			cfg.SetName("argocd")
+			if err := c.Client().Resources().Delete(ctx, cfg); err != nil && !apierrors.IsNotFound(err) {
+				t.Logf("teardown: failed to delete ProviderConfig: %v", err)
+			}
 			return ctx
 		}).
 		Teardown(providers.DeleteMCP(caTestMCPName, wait.WithTimeout(5*time.Minute))).
@@ -273,18 +281,6 @@ func TestCustomCA(t *testing.T) {
 			}
 			if err := c.Client().Resources().Delete(ctx, secret); err != nil && !apierrors.IsNotFound(err) {
 				t.Logf("teardown: failed to delete CA secret: %v", err)
-			}
-
-			// Clear caBundleSecret from the ProviderConfig so TestServiceProvider
-			// and subsequent runs are not affected.
-			cfg := &apiv1alpha1.ProviderConfig{}
-			if err := c.Client().Resources().Get(ctx, "argocd", "", cfg); err != nil {
-				t.Logf("teardown: failed to get ProviderConfig: %v", err)
-				return ctx
-			}
-			cfg.Spec.CABundleSecret = ""
-			if err := c.Client().Resources().Update(ctx, cfg); err != nil {
-				t.Logf("teardown: failed to clear caBundleSecret from ProviderConfig: %v", err)
 			}
 			return ctx
 		})
