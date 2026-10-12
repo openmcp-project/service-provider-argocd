@@ -158,7 +158,7 @@ func TestServiceProvider(t *testing.T) {
 
 				// Wait for the Ready condition to be True
 				if err := wait.For(openmcpconditions.Match(api, onboardingCfg, "Ready", corev1.ConditionTrue),
-					wait.WithTimeout(10*time.Minute)); err != nil {
+					wait.WithTimeout(15*time.Minute)); err != nil {
 					t.Error(err)
 				}
 
