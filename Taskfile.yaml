@@ -33,4 +33,4 @@ tasks:
     desc: "Build image and run e2e tests"
     cmds:
       - task: build:img:build-test
-      - go test -v -timeout 60m ./test/e2e/... -count=1
+      - go test -v ./test/e2e/... -count=1
