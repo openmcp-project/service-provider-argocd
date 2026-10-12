@@ -2,12 +2,15 @@ package argocd
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -275,13 +278,13 @@ func TestApplyReloaderOCIRepository_NoCertSecretRefWhenNoCA(t *testing.T) {
 	}
 }
 
-// ── removeCABundle ────────────────────────────────────────────────────────────
+// ── RemoveCABundle ────────────────────────────────────────────────────────────
 
 func TestRemoveCABundle_Noop(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(newScheme(t)).Build()
 	p := newTestProvisioner(fc, "")
 
-	if err := p.removeCABundle(context.Background()); err != nil {
+	if err := p.RemoveCABundle(context.Background()); err != nil {
 		t.Fatalf("expected no error for empty caBundleSecret, got: %v", err)
 	}
 }
@@ -295,8 +298,8 @@ func TestRemoveCABundle_DeletesTenantCopy(t *testing.T) {
 		Build()
 	p := newTestProvisioner(fc, testCASecret)
 
-	if err := p.removeCABundle(context.Background()); err != nil {
-		t.Fatalf("removeCABundle: %v", err)
+	if err := p.RemoveCABundle(context.Background()); err != nil {
+		t.Fatalf("RemoveCABundle: %v", err)
 	}
 
 	// Secret must be gone from the tenant namespace.
@@ -306,7 +309,7 @@ func TestRemoveCABundle_DeletesTenantCopy(t *testing.T) {
 		Namespace: testTenantNS,
 	}, got)
 	if !apierrors.IsNotFound(err) {
-		t.Fatalf("expected NotFound after removeCABundle, got: %v", err)
+		t.Fatalf("expected NotFound after RemoveCABundle, got: %v", err)
 	}
 }
 
@@ -315,7 +318,7 @@ func TestRemoveCABundle_AlreadyGone(t *testing.T) {
 	p := newTestProvisioner(fc, testCASecret)
 
 	// Secret was never created — should be a no-op, not an error.
-	if err := p.removeCABundle(context.Background()); err != nil {
+	if err := p.RemoveCABundle(context.Background()); err != nil {
 		t.Fatalf("expected no error when secret is already absent, got: %v", err)
 	}
 }
@@ -330,8 +333,8 @@ func TestRemoveCABundle_DoesNotDeleteSourceSecret(t *testing.T) {
 		Build()
 	p := newTestProvisioner(fc, testCASecret)
 
-	if err := p.removeCABundle(context.Background()); err != nil {
-		t.Fatalf("removeCABundle: %v", err)
+	if err := p.RemoveCABundle(context.Background()); err != nil {
+		t.Fatalf("RemoveCABundle: %v", err)
 	}
 
 	// Source secret in the provider namespace must still be there.
@@ -341,5 +344,101 @@ func TestRemoveCABundle_DoesNotDeleteSourceSecret(t *testing.T) {
 		Namespace: testProviderNS,
 	}, got); err != nil {
 		t.Fatalf("source secret in provider namespace was unexpectedly deleted: %v", err)
+	}
+}
+
+// ── CountUserArgoCDResources (deletion guard) ──────────────────────────────────
+
+// mcpSchemeWithArgoProj registers the ArgoCD Application, ApplicationSet, and
+// AppProject list/item kinds as unstructured so a fake MCP client can serve
+// List calls for the deletion guard.
+func mcpSchemeWithArgoProj(t *testing.T) *runtime.Scheme {
+	t.Helper()
+	s := runtime.NewScheme()
+	for _, listGVK := range []schema.GroupVersionKind{applicationListGVK, applicationSetListGVK, appProjectListGVK} {
+		itemGVK := listGVK
+		itemGVK.Kind = strings.TrimSuffix(listGVK.Kind, "List")
+		s.AddKnownTypeWithName(itemGVK, &unstructured.Unstructured{})
+		s.AddKnownTypeWithName(listGVK, &unstructured.UnstructuredList{})
+	}
+	return s
+}
+
+// argoProject builds an unstructured ArgoCD AppProject with the given coordinates.
+func argoProject(name, namespace string) *unstructured.Unstructured {
+	gvk := appProjectListGVK
+	gvk.Kind = "AppProject"
+	obj := &unstructured.Unstructured{}
+	obj.SetGroupVersionKind(gvk)
+	obj.SetName(name)
+	obj.SetNamespace(namespace)
+	return obj
+}
+
+// newGuardProvisioner builds a Provisioner whose MCP client is backed by the
+// given objects, installed into DefaultNamespace.
+func newGuardProvisioner(t *testing.T, objs ...client.Object) *Provisioner {
+	t.Helper()
+	fc := fake.NewClientBuilder().
+		WithScheme(mcpSchemeWithArgoProj(t)).
+		WithObjects(objs...).
+		Build()
+	return NewProvisioner(ProvisionerConfig{MCPClient: fc, MCPNamespace: DefaultNamespace})
+}
+
+func TestCountUserArgoCDResources_ExcludesDefaultAppProject(t *testing.T) {
+	// Only ArgoCD's auto-created default project exists. It must not count, or the
+	// deletion guard would stay tripped forever and the ArgoCD CR could never be
+	// deleted — the exact teardown hang observed in the e2e CustomCA test.
+	p := newGuardProvisioner(t, argoProject(defaultAppProjectName, DefaultNamespace))
+
+	n, err := p.CountUserArgoCDResources(context.Background())
+	if err != nil {
+		t.Fatalf("CountUserArgoCDResources: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("expected 0 user resources (default AppProject excluded), got %d", n)
+	}
+}
+
+func TestCountUserArgoCDResources_CountsUserAppProjects(t *testing.T) {
+	// A user-created project alongside the default one must still block deletion.
+	p := newGuardProvisioner(t,
+		argoProject(defaultAppProjectName, DefaultNamespace),
+		argoProject("team-a", DefaultNamespace),
+	)
+
+	n, err := p.CountUserArgoCDResources(context.Background())
+	if err != nil {
+		t.Fatalf("CountUserArgoCDResources: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected 1 user AppProject, got %d", n)
+	}
+}
+
+func TestCountUserArgoCDResources_CountsDefaultNamedProjectInOtherNamespace(t *testing.T) {
+	// The exclusion is scoped to the install namespace: a project that merely
+	// happens to be named "default" elsewhere is a real user resource.
+	p := newGuardProvisioner(t, argoProject(defaultAppProjectName, "team-ns"))
+
+	n, err := p.CountUserArgoCDResources(context.Background())
+	if err != nil {
+		t.Fatalf("CountUserArgoCDResources: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected 1 user AppProject in another namespace, got %d", n)
+	}
+}
+
+func TestCountUserArgoCDResources_NoResources(t *testing.T) {
+	p := newGuardProvisioner(t)
+
+	n, err := p.CountUserArgoCDResources(context.Background())
+	if err != nil {
+		t.Fatalf("CountUserArgoCDResources: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("expected 0 resources, got %d", n)
 	}
 }

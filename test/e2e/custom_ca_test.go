@@ -88,6 +88,7 @@ func upsertCAProviderConfig(ctx context.Context, t *testing.T, c *envconf.Config
 			ChartURL:     ptr.To(testArgoCDChartURL),
 		}}
 		cfg.Spec.CABundleSecret = caBundleSecret
+		cfg.Spec.PollInterval = &metav1.Duration{Duration: 10 * time.Second}
 		if err := c.Client().Resources().Create(ctx, cfg); err != nil {
 			t.Errorf("failed to create ProviderConfig: %v", err)
 		}
@@ -98,6 +99,7 @@ func upsertCAProviderConfig(ctx context.Context, t *testing.T, c *envconf.Config
 		return
 	}
 	cfg.Spec.CABundleSecret = caBundleSecret
+	cfg.Spec.PollInterval = &metav1.Duration{Duration: 10 * time.Second}
 	if err := c.Client().Resources().Update(ctx, cfg); err != nil {
 		t.Errorf("failed to update ProviderConfig with caBundleSecret: %v", err)
 	}
@@ -137,7 +139,7 @@ func TestCustomCA(t *testing.T) {
 			upsertCAProviderConfig(ctx, t, c, caSecretName)
 			return ctx
 		}).
-		Setup(providers.CreateMCP(caTestMCPName)).
+		Setup(providers.CreateMCP(caTestMCPName, wait.WithTimeout(10*time.Minute))).
 
 		// ── 1. ArgoCD CR becomes Ready ────────────────────────────────────────
 		Assess("ArgoCD CR becomes Ready with CA configured",
@@ -260,7 +262,7 @@ func TestCustomCA(t *testing.T) {
 			}
 			if err := wait.For(
 				conditions.New(onboarding.Client().Resources()).ResourceDeleted(api),
-				wait.WithTimeout(5*time.Minute),
+				wait.WithTimeout(10*time.Minute),
 			); err != nil {
 				t.Logf("teardown: ArgoCD CR not fully deleted within timeout: %v", err)
 			}

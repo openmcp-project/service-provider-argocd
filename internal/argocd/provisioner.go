@@ -172,7 +172,9 @@ func (p *Provisioner) Ready(ctx context.Context) (bool, string, error) {
 }
 
 // Uninstall deletes the Flux resources. Deleting the HelmRelease triggers Flux
-// to uninstall the ArgoCD release from the MCP.
+// to uninstall the ArgoCD release from the MCP. It does not remove the CA
+// bundle secret — that must be done after IsUninstalled returns true, once the
+// OCIRepository (which references the secret via certSecretRef) is fully gone.
 func (p *Provisioner) Uninstall(ctx context.Context) error {
 	hr := &helmv2.HelmRelease{
 		ObjectMeta: metav1.ObjectMeta{Name: helmReleaseName, Namespace: p.tenantNamespace},
@@ -188,10 +190,7 @@ func (p *Provisioner) Uninstall(ctx context.Context) error {
 		return fmt.Errorf("deleting OCIRepository: %w", err)
 	}
 
-	if err := p.removeReloaderResources(ctx); err != nil {
-		return err
-	}
-	return p.removeCABundle(ctx)
+	return p.removeReloaderResources(ctx)
 }
 
 // IsUninstalled reports whether all managed Flux resources have been fully
@@ -235,8 +234,11 @@ func (p *Provisioner) IsUninstalled(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
-// CountUserArgoCDResources returns the number of ArgoCD Application and
-// ApplicationSet resources still present on the MCP. Missing CRDs are treated
+// CountUserArgoCDResources returns the number of user-created ArgoCD
+// Application, ApplicationSet, and AppProject resources still present on the
+// MCP. The "default" AppProject that ArgoCD provisions automatically in its
+// install namespace is excluded — it is not a user workload, and counting it
+// would keep the deletion guard permanently tripped. Missing CRDs are treated
 // as zero.
 func (p *Provisioner) CountUserArgoCDResources(ctx context.Context) (int, error) {
 	applications, err := p.countResourcesByGVK(ctx, applicationListGVK, "ArgoCD Applications")
@@ -249,7 +251,7 @@ func (p *Provisioner) CountUserArgoCDResources(ctx context.Context) (int, error)
 		return 0, err
 	}
 
-	appProjects, err := p.countResourcesByGVK(ctx, appProjectListGVK, "ArgoCD AppProjects")
+	appProjects, err := p.countUserAppProjects(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -258,19 +260,49 @@ func (p *Provisioner) CountUserArgoCDResources(ctx context.Context) (int, error)
 	return total, nil
 }
 
+// countUserAppProjects counts AppProjects on the MCP, excluding the "default"
+// project that ArgoCD auto-creates in its install namespace. A missing CRD is
+// treated as zero.
+func (p *Provisioner) countUserAppProjects(ctx context.Context) (int, error) {
+	list, err := p.listResourcesByGVK(ctx, appProjectListGVK, "ArgoCD AppProjects")
+	if err != nil {
+		return 0, err
+	}
+
+	count := 0
+	for i := range list.Items {
+		item := &list.Items[i]
+		if item.GetName() == defaultAppProjectName && item.GetNamespace() == p.mcpNamespace {
+			continue
+		}
+		count++
+	}
+	return count, nil
+}
+
 // countResourcesByGVK returns the number of MCP resources for the given list
 // kind. A missing CRD is treated as zero.
 func (p *Provisioner) countResourcesByGVK(ctx context.Context, gvk schema.GroupVersionKind, resourceName string) (int, error) {
+	list, err := p.listResourcesByGVK(ctx, gvk, resourceName)
+	if err != nil {
+		return 0, err
+	}
+	return len(list.Items), nil
+}
+
+// listResourcesByGVK lists the MCP resources for the given list kind. A missing
+// CRD is treated as an empty list rather than an error.
+func (p *Provisioner) listResourcesByGVK(ctx context.Context, gvk schema.GroupVersionKind, resourceName string) (*unstructured.UnstructuredList, error) {
 	list := &unstructured.UnstructuredList{}
 	list.SetGroupVersionKind(gvk)
 
 	if err := p.mcpClient.List(ctx, list); err != nil {
 		if meta.IsNoMatchError(err) {
-			return 0, nil
+			return list, nil
 		}
-		return 0, fmt.Errorf("listing %s: %w", resourceName, err)
+		return nil, fmt.Errorf("listing %s: %w", resourceName, err)
 	}
-	return len(list.Items), nil
+	return list, nil
 }
 
 // applyOCIRepository creates or updates the OCIRepository that points at the
@@ -437,7 +469,7 @@ func (p *Provisioner) reconcileCABundle(ctx context.Context) error {
 	if p.caBundleSecret != "" {
 		return p.ensureCABundle(ctx)
 	}
-	return p.removeCABundle(ctx)
+	return p.RemoveCABundle(ctx)
 }
 
 // ensureCABundle reads the CA bundle Secret from the service provider namespace
@@ -481,10 +513,14 @@ func (p *Provisioner) ensureCABundle(ctx context.Context) error {
 	return nil
 }
 
-// removeCABundle deletes the CA bundle Secret that was synced into the tenant
+// RemoveCABundle deletes the CA bundle Secret that was synced into the tenant
 // namespace. It is a no-op when no CA bundle is configured or the secret no
 // longer exists.
-func (p *Provisioner) removeCABundle(ctx context.Context) error {
+//
+// During uninstall this must be called only after IsUninstalled returns true,
+// so that the OCIRepository (which holds a certSecretRef to the secret) has
+// already been fully removed by source-controller.
+func (p *Provisioner) RemoveCABundle(ctx context.Context) error {
 	if p.caBundleSecret != "" {
 		// Fast path: name is known, delete directly.
 		s := &corev1.Secret{

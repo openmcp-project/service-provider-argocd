@@ -205,6 +205,13 @@ func (r *ArgoCDReconciler) Delete(ctx context.Context, obj *apiv1alpha1.ArgoCD, 
 		return ctrl.Result{RequeueAfter: requeueInterval}, nil
 	}
 
+	// All Flux resources are gone — safe to remove the CA bundle secret now
+	// that nothing holds a certSecretRef to it anymore.
+	if err := provisioner.RemoveCABundle(ctx); err != nil {
+		log.Error(err, "failed to remove CA bundle secret after uninstall")
+		return ctrl.Result{}, err
+	}
+
 	return ctrl.Result{}, nil
 }
 
