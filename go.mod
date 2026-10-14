@@ -1,12 +1,12 @@
 module github.com/openmcp-project/service-provider-argocd
 
-go 1.27.1
+go 1.27.2
 
 require (
-	github.com/fluxcd/helm-controller/api v1.6.4
+	github.com/fluxcd/helm-controller/api v1.6.5
 	github.com/fluxcd/pkg/apis/meta v1.32.0
 	github.com/fluxcd/pkg/runtime v0.115.0
-	github.com/fluxcd/source-controller/api v1.9.5
+	github.com/fluxcd/source-controller/api v1.9.6
 	github.com/openmcp-project/controller-utils v0.33.1
 	github.com/openmcp-project/opencontrolplane-runtime v1.4.1
 	github.com/openmcp-project/openmcp-operator/api v1.4.1
@@ -19,7 +19,7 @@ require (
 	k8s.io/client-go v0.37.1
 	k8s.io/klog/v2 v2.140.0
 	k8s.io/utils v0.0.0-20260707023825-cf1189d6abe3
-	sigs.k8s.io/controller-runtime v0.25.1
+	sigs.k8s.io/controller-runtime v0.25.2
 	sigs.k8s.io/e2e-framework v0.7.0
 )
 

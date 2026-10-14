@@ -37,8 +37,8 @@ github.com/felixge/httpsnoop v1.0.4 h1:NFTV2Zj1bL4mc9sqWACXbQFVBBg2W3GPvqp8/ESS2
 github.com/felixge/httpsnoop v1.0.4/go.mod h1:m8KPJKqk1gH5J9DgRY2ASl2lWCfGKXixSwevea8zH2U=
 github.com/fluxcd/flux2/v2 v2.9.5 h1:jwCccxvkD+2QnsjN+pl5QqM8KnFUwA8pIoQ1Lf0avkA=
 github.com/fluxcd/flux2/v2 v2.9.5/go.mod h1:3vJcn0MuvymH7sU00RKCFULJbnuebC1pmlOwUjbTXGo=
-github.com/fluxcd/helm-controller/api v1.6.4 h1:jDgB87F6RRNF0QEZDAw+8+HPU13toF5IZpPsytA0Nuo=
-github.com/fluxcd/helm-controller/api v1.6.4/go.mod h1:mYa4WKwgCCE59dMdYzOJI6B17/wofN6wtmtjWWEQesQ=
+github.com/fluxcd/helm-controller/api v1.6.5 h1:ElqM5KIpdUwVK1VSi1fXcMwOlf0LghuqwM2SwqaTyNs=
+github.com/fluxcd/helm-controller/api v1.6.5/go.mod h1:mYa4WKwgCCE59dMdYzOJI6B17/wofN6wtmtjWWEQesQ=
 github.com/fluxcd/kustomize-controller/api v1.9.5 h1:Z4CA0cpC9rQmWiJWT9PCNO7+v3PVbAOK+5byHdbtFt8=
 github.com/fluxcd/kustomize-controller/api v1.9.5/go.mod h1:oRSEvNgNs07P6Tu3xtRigWxnxLkUCqatxbDv+gG3tLI=
 github.com/fluxcd/pkg/apis/acl v0.11.0 h1:BxThatpA6qd5Qzwim6/hRu0gdAX0JxNm3PledDuJqXo=
@@ -53,8 +53,8 @@ github.com/fluxcd/pkg/runtime v0.115.0 h1:jPt/YG/NXBjAqfc1M/APXClYuGx4dtDC7+kBm4
 github.com/fluxcd/pkg/runtime v0.115.0/go.mod h1:B8SgKzN1cctmfLImWbYM1lmlZdjx8IzqnQuLA1A/dKk=
 github.com/fluxcd/pkg/tar v1.2.0 h1:T6WFB5M0YRHktlrgdKNskqpdp76TVDdWTOeuWz33CFs=
 github.com/fluxcd/pkg/tar v1.2.0/go.mod h1:Wlalp5vIVe+BbckkKkqExKcoHAeeWJPAzwK7ONeFcS0=
-github.com/fluxcd/source-controller/api v1.9.5 h1:QwOqmw6/NqOXUR+kGmBJ18CEvthD8DNrSRTtjQG+bHQ=
-github.com/fluxcd/source-controller/api v1.9.5/go.mod h1:Y5mcHYzML/mJYjvSJRcIo7eLLjd+cZjnKR6WeIGrouE=
+github.com/fluxcd/source-controller/api v1.9.6 h1:h9+CsJVw4CNbMEsnEb11SGEhLfKzVTkWC0w7M8VX4Hk=
+github.com/fluxcd/source-controller/api v1.9.6/go.mod h1:Y5mcHYzML/mJYjvSJRcIo7eLLjd+cZjnKR6WeIGrouE=
 github.com/fsnotify/fsnotify v1.10.1 h1:b0/UzAf9yR5rhf3RPm9gf3ehBPpf0oZKIjtpKrx59Ho=
 github.com/fsnotify/fsnotify v1.10.1/go.mod h1:TLheqan6HD6GBK6PrDWyDPBaEV8LspOxvPSjC+bVfgo=
 github.com/fxamacker/cbor/v2 v2.9.3 h1:oQBnFATpNdY8gJHTndDDv5Xl4QqNaz51G5LLEPhng3Q=
@@ -292,8 +292,8 @@ k8s.io/utils v0.0.0-20260707023825-cf1189d6abe3 h1:jVkFFVfXdXP74B/zbO3hM3hpSFD0x
 k8s.io/utils v0.0.0-20260707023825-cf1189d6abe3/go.mod h1:M2s5JB1lIYP3jzZdorPLHXIPJzt9vv2muW5a6L9DtNM=
 sigs.k8s.io/apiserver-network-proxy/konnectivity-client v0.36.0 h1:/YpDJ4vReG7ZmzSpBGxduXgywWkJU9zHubgJG03MT+Y=
 sigs.k8s.io/apiserver-network-proxy/konnectivity-client v0.36.0/go.mod h1:tJo1aepTXyR+8Xs3sUsGBDk4Ub2AM5dPAPKJx0mpm5c=
-sigs.k8s.io/controller-runtime v0.25.1 h1:BKgU9OeE8xv8EbbM8cY0NVzTQs35rokkdq1jh12fMb4=
-sigs.k8s.io/controller-runtime v0.25.1/go.mod h1:4QqLdT6z/L6Olj8JJCtvztid4/fnIiYsfaTFScegctc=
+sigs.k8s.io/controller-runtime v0.25.2 h1:bEkK3PVOIVK9X8QWLGVhJgmFc++47vfT6wakSzAOLsQ=
+sigs.k8s.io/controller-runtime v0.25.2/go.mod h1:4QqLdT6z/L6Olj8JJCtvztid4/fnIiYsfaTFScegctc=
 sigs.k8s.io/e2e-framework v0.7.0 h1:AHkySTC6MvnnMbVSxaO4z1m2MhQKNFP+2Ihs5pRNLlM=
 sigs.k8s.io/e2e-framework v0.7.0/go.mod h1:1ZgXkUSjmnf18/JgHZNEATWjv48O5lJm9aI1QIsRdbw=
 sigs.k8s.io/json v0.0.0-20250730193827-2d320260d730 h1:IpInykpT6ceI+QxKBbEflcR5EXP7sU1kvOlxwZh5txg=
