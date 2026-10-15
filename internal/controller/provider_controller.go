@@ -205,6 +205,13 @@ func (r *ArgoCDReconciler) Delete(ctx context.Context, obj *apiv1alpha1.ArgoCD, 
 		return ctrl.Result{RequeueAfter: requeueInterval}, nil
 	}
 
+	// All Flux resources are gone — safe to remove the CA bundle secret now
+	// that nothing holds a certSecretRef to it anymore.
+	if err := provisioner.RemoveCABundle(ctx); err != nil {
+		log.Error(err, "failed to remove CA bundle secret after uninstall")
+		return ctrl.Result{}, err
+	}
+
 	return ctrl.Result{}, nil
 }
 
@@ -223,14 +230,16 @@ func (r *ArgoCDReconciler) newProvisioner(obj *apiv1alpha1.ArgoCD, pc *apiv1alph
 	}
 
 	return argocd.NewProvisioner(argocd.ProvisionerConfig{
-		PlatformClient:       r.PlatformCluster.Client(),
-		MCPClient:            clusterCtx.MCPCluster.Client(),
-		TenantNamespace:      tenantNamespace,
-		MCPNamespace:         providerNamespace(obj),
-		KubeConfigSecretName: clusterCtx.MCPAccessSecretKey.Name,
-		PollInterval:         pc.PollInterval(),
-		Exposure:             resolveExposure(obj, pc, clusterCtx.MCPCluster.APIServerEndpoint()),
-		Reloader:             resolveReloader(pc),
+		PlatformClient:          r.PlatformCluster.Client(),
+		MCPClient:               clusterCtx.MCPCluster.Client(),
+		TenantNamespace:         tenantNamespace,
+		MCPNamespace:            providerNamespace(obj),
+		KubeConfigSecretName:    clusterCtx.MCPAccessSecretKey.Name,
+		PollInterval:            pc.PollInterval(),
+		Exposure:                resolveExposure(obj, pc, clusterCtx.MCPCluster.APIServerEndpoint()),
+		Reloader:                resolveReloader(pc),
+		CABundleSecret:          pc.CABundleSecret(),
+		CABundleSourceNamespace: r.PodNamespace,
 	}), nil
 }
 
