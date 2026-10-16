@@ -23,6 +23,39 @@ type ExposureValues struct {
 	ReloaderEnabled bool
 }
 
+// imagePullSecretsValues mirrors the subset of Helm values this provider reads
+// in order to discover image pull secrets that must be replicated from the
+// service provider's namespace onto the ArgoCD namespace on the MCP, as
+// documented on ArgoCDVersion.Values.
+type imagePullSecretsValues struct {
+	Global struct {
+		ImagePullSecrets []struct {
+			Name string `json:"name"`
+		} `json:"imagePullSecrets,omitempty"`
+	} `json:"global,omitempty"`
+}
+
+// ImagePullSecretNames extracts the names listed under
+// values.global.imagePullSecrets[].name from the operator-supplied Helm
+// values. It returns an empty slice when values is nil/empty or the path is
+// not set.
+func ImagePullSecretNames(values *apiextensionsv1.JSON) ([]string, error) {
+	if values == nil || len(values.Raw) == 0 {
+		return nil, nil
+	}
+	var parsed imagePullSecretsValues
+	if err := json.Unmarshal(values.Raw, &parsed); err != nil {
+		return nil, fmt.Errorf("decoding values to extract global.imagePullSecrets: %w", err)
+	}
+	names := make([]string, 0, len(parsed.Global.ImagePullSecrets))
+	for _, ref := range parsed.Global.ImagePullSecrets {
+		if ref.Name != "" {
+			names = append(names, ref.Name)
+		}
+	}
+	return names, nil
+}
+
 // buildValues merges the operator-supplied chart values with the exposure
 // fragment derived from the ArgoCD request. Precedence is:
 //
