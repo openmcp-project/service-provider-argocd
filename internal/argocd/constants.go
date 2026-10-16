@@ -50,6 +50,12 @@ const (
 	managedByReloaderValue = "service-provider-argocd-reloader"
 )
 
+// imagePullSecretManagedByValue marks Secrets that this provider has copied
+// from its own namespace onto the MCP's ArgoCD namespace (per
+// values.global.imagePullSecrets), so that they can be found again for
+// pruning and cleanup.
+const imagePullSecretManagedByValue = managedByArgoCDValue
+
 // applicationListGVK identifies the ArgoCD Application list kind. It is used as
 // a deletion guard so that user workloads are never orphaned.
 var applicationListGVK = schema.GroupVersionKind{
