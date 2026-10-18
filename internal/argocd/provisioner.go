@@ -429,10 +429,21 @@ func (p *Provisioner) reconcileImagePullSecrets(ctx context.Context, values *api
 // the platform cluster to mcpNamespace on the MCP. It is a create-or-update so
 // that upstream changes (e.g. credential rotation) are picked up on the next
 // reconciliation.
+//
+// Image pull secrets are reconciled before the HelmRelease/OCIRepository are
+// applied (see Install), which means on a brand-new MCP the target namespace
+// may not exist yet — Flux only creates it once the Helm install actually
+// runs. ensureMCPNamespace guards against that chicken-and-egg ordering so the
+// very first reconciliation does not fail permanently with "namespace not
+// found" before ArgoCD ever gets a chance to be installed.
 func (p *Provisioner) copyImagePullSecret(ctx context.Context, name string) error {
 	source := &corev1.Secret{}
 	if err := p.platformClient.Get(ctx, client.ObjectKey{Name: name, Namespace: p.podNamespace}, source); err != nil {
 		return fmt.Errorf("getting image pull secret %q from namespace %q: %w", name, p.podNamespace, err)
+	}
+
+	if err := p.ensureMCPNamespace(ctx); err != nil {
+		return fmt.Errorf("ensuring namespace %q exists on the MCP: %w", p.mcpNamespace, err)
 	}
 
 	target := &corev1.Secret{
@@ -446,6 +457,16 @@ func (p *Provisioner) copyImagePullSecret(ctx context.Context, name string) erro
 	})
 	if err != nil {
 		return fmt.Errorf("replicating image pull secret %q to namespace %q on the MCP: %w", name, p.mcpNamespace, err)
+	}
+	return nil
+}
+
+// ensureMCPNamespace creates mcpNamespace on the MCP if it does not already
+// exist. It is idempotent and safe to call on every reconciliation.
+func (p *Provisioner) ensureMCPNamespace(ctx context.Context) error {
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: p.mcpNamespace}}
+	if err := p.mcpClient.Create(ctx, ns); err != nil && !apierrors.IsAlreadyExists(err) {
+		return err
 	}
 	return nil
 }

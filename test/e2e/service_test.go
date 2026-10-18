@@ -157,7 +157,7 @@ func TestServiceProvider(t *testing.T) {
 			}
 			return ctx
 		}).
-		Setup(providers.CreateMCP(mcpName)).
+		Setup(providers.CreateMCP(mcpName, wait.WithTimeout(15*time.Minute))).
 
 		// ── 1. Basic provisioning ────────────────────────────────────────────────
 		Assess("verify provider can be successfully consumed",

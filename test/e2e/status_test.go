@@ -57,7 +57,7 @@ func TestStatusFailed(t *testing.T) {
 
 			return ctx
 		}).
-		Setup(providers.CreateMCP("test-status-failed")).
+		Setup(providers.CreateMCP("test-status-failed", wait.WithTimeout(15*time.Minute))).
 		Assess("StatusFailed sets Ready=False with reason InvalidVersion for an unknown version",
 			func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				config, err := clusterutils.OnboardingConfig()

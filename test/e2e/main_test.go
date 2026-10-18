@@ -7,8 +7,10 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"k8s.io/klog/v2"
+	"sigs.k8s.io/e2e-framework/klient/wait"
 	"sigs.k8s.io/e2e-framework/pkg/env"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 
@@ -49,6 +51,17 @@ func TestMain(m *testing.M) {
 		Extensions: []extensions.Extension{
 			&fluxcd.FluxCD{},
 		},
+		// Each kind-based Cluster (platform, onboarding, and later the MCP) only
+		// reports status.phase=Ready once cluster-provider-kind has deployed
+		// MetalLB into it AND all of its pods report ready, on top of the kind
+		// cluster itself becoming reachable. On a host that is also busy
+		// building the provider image and/or running several nested kind
+		// clusters concurrently, that can comfortably take longer than the
+		// klient/wait package's 5-minute default, causing ClustersReady (called
+		// from verifyEnvironment during Bootstrap) to fail with "context
+		// deadline exceeded" even though nothing is actually stuck — it just
+		// needs more time. Give it generous headroom here.
+		WaitOpts: []wait.Option{wait.WithTimeout(15 * time.Minute)},
 	}
 	testenv = env.NewWithConfig(envconf.New().WithNamespace(openmcp.Namespace))
 	openmcp.Bootstrap(testenv)
