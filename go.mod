@@ -4,14 +4,14 @@ go 1.27.2
 
 require (
 	github.com/fluxcd/helm-controller/api v1.6.5
-	github.com/fluxcd/pkg/apis/meta v1.32.0
-	github.com/fluxcd/pkg/runtime v0.115.0
+	github.com/fluxcd/pkg/apis/meta v1.33.0
+	github.com/fluxcd/pkg/runtime v0.117.0
 	github.com/fluxcd/source-controller/api v1.9.6
-	github.com/openmcp-project/controller-utils v0.33.1
-	github.com/openmcp-project/opencontrolplane-runtime v1.4.1
-	github.com/openmcp-project/openmcp-operator/api v1.4.1
-	github.com/openmcp-project/openmcp-operator/lib v1.4.1
-	github.com/openmcp-project/openmcp-testing v1.4.1
+	github.com/openmcp-project/controller-utils v0.33.2
+	github.com/openmcp-project/opencontrolplane-runtime v1.4.2
+	github.com/openmcp-project/openmcp-operator/api v1.4.2
+	github.com/openmcp-project/openmcp-operator/lib v1.4.2
+	github.com/openmcp-project/openmcp-testing v1.4.2
 	github.com/spf13/pflag v1.0.10
 	k8s.io/api v0.37.1
 	k8s.io/apiextensions-apiserver v0.37.1
@@ -37,11 +37,11 @@ require (
 	github.com/emicklei/go-restful/v3 v3.13.0 // indirect
 	github.com/evanphx/json-patch/v5 v5.9.11 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
-	github.com/fluxcd/flux2/v2 v2.9.5 // indirect
-	github.com/fluxcd/kustomize-controller/api v1.9.5 // indirect
+	github.com/fluxcd/flux2/v2 v2.9.6 // indirect
+	github.com/fluxcd/kustomize-controller/api v1.9.6 // indirect
 	github.com/fluxcd/pkg/apis/acl v0.11.0 // indirect
 	github.com/fluxcd/pkg/apis/kustomize v1.21.0 // indirect
-	github.com/fluxcd/pkg/kustomize v1.35.6 // indirect
+	github.com/fluxcd/pkg/kustomize v1.35.7 // indirect
 	github.com/fluxcd/pkg/tar v1.2.0 // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.3 // indirect
@@ -78,7 +78,7 @@ require (
 	github.com/modern-go/reflect2 v1.0.3-0.20250322232337-35a7c28c31ee // indirect
 	github.com/monochromegane/go-gitignore v0.0.0-20200626010858-205db1a8cc00 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
-	github.com/onsi/gomega v1.43.0 // indirect
+	github.com/onsi/gomega v1.44.0 // indirect
 	github.com/pelletier/go-toml v1.9.5 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
