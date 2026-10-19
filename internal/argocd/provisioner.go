@@ -360,6 +360,7 @@ func (p *Provisioner) applyHelmRelease(ctx context.Context, version apiv1alpha1.
 			Install: &helmv2.Install{
 				CRDs:            helmv2.Create,
 				CreateNamespace: true,
+				Timeout:         &metav1.Duration{Duration: 10 * time.Minute},
 				Remediation:     &helmv2.InstallRemediation{Retries: 3},
 			},
 			Upgrade: &helmv2.Upgrade{
