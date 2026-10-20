@@ -9,6 +9,13 @@ const (
 	// installed when the ProviderConfig does not override it.
 	DefaultNamespace = "argocd"
 
+	// defaultAppProjectName is the AppProject that ArgoCD provisions
+	// automatically in its install namespace. It is not a user-created workload,
+	// so the deletion guard must ignore it; otherwise any ArgoCD instance that
+	// ever installed successfully would be permanently undeletable, because its
+	// own default project would keep the guard tripped.
+	defaultAppProjectName = "default"
+
 	// ociRepositoryName and helmReleaseName are the stable names of the Flux
 	// resources this provider manages per ArgoCD instance. They live in the
 	// tenant namespace on the platform cluster.
@@ -48,6 +55,11 @@ const (
 	// watch never sees Reloader HelmRelease failures and never cascades them into
 	// ArgoCD CR deletion.
 	managedByReloaderValue = "service-provider-argocd-reloader"
+
+	// caBundleLabel is stamped on Secrets synced into tenant namespaces by
+	// ensureCABundle. It allows removeCABundle to find and delete the secret
+	// by label when caBundleSecret has been cleared from the ProviderConfig.
+	caBundleLabel = "argocd.services.open-control-plane.io/ca-bundle"
 )
 
 // applicationListGVK identifies the ArgoCD Application list kind. It is used as
