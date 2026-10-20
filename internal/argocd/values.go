@@ -18,9 +18,6 @@ import (
 //go:embed configurations/argocd-vault.yaml
 var argocdVaultYAML []byte
 
-//go:embed configurations/resources/*.yaml
-var resourcesFS embed.FS
-
 //go:embed secrets/*.yaml
 var secretsFS embed.FS
 
@@ -41,9 +38,10 @@ type ExposureValues struct {
 // vaultPluginValues carries the ArgoCD Vault Plugin settings resolved from the
 // ProviderConfig. When enabled is false the other fields are ignored.
 type vaultPluginValues struct {
-	enabled  bool
-	registry string
-	tag      string
+	enabled   bool
+	registry  string
+	tag       string
+	namespace string
 }
 
 // buildValues merges the operator-supplied chart values with the exposure
@@ -67,7 +65,7 @@ func buildValues(base *apiextensionsv1.JSON, exposure ExposureValues, vaultPlugi
 		if err != nil {
 			return nil, fmt.Errorf("loading vault plugin values: %w", err)
 		}
-		vaultFragment, err := vaultPluginFragment(version, repository, vaultPlugin.registry, vaultPlugin.tag)
+		vaultFragment, err := vaultPluginFragment(version, repository, vaultPlugin.registry, vaultPlugin.tag, vaultPlugin.namespace)
 		if err != nil {
 			return nil, fmt.Errorf("loading vault plugin values: %w", err)
 		}
@@ -122,13 +120,16 @@ func globalImageRepository(values map[string]any) (string, error) {
 // and {{ .Values.global.image.tag }} references are resolved before parsing.
 // The AVP initContainer container has its image set to registry:tag so
 // that the plugin binary comes from the operator-configured image.
-func vaultPluginFragment(version, repository, registry, tag string) (map[string]any, error) {
+func vaultPluginFragment(version, repository, registry, tag, namespace string) (map[string]any, error) {
 	tmpl, err := template.New("argocd-vault").Option("missingkey=error").Parse(string(argocdVaultYAML))
 	if err != nil {
 		return nil, fmt.Errorf("parsing argocd-vault.yaml template: %w", err)
 	}
 
 	data := map[string]any{
+		"Release": map[string]any{
+			"Namespace": namespace,
+		},
 		"Values": map[string]any{
 			"global": map[string]any{
 				"image": map[string]any{

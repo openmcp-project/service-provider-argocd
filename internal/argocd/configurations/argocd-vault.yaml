@@ -179,3 +179,106 @@ repoServer:
         - name: k8s-sa-project
           mountPath: /var/run/secrets/kubernetes.io/serviceaccount
           readOnly: true
+
+extraObjects:
+  - apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: cmp-plugin
+    data:
+      avp-kustomize.yaml: |
+        ---
+        apiVersion: argoproj.io/v1alpha1
+        kind: ConfigManagementPlugin
+        metadata:
+          name: argocd-vault-plugin-kustomize
+        spec:
+          allowConcurrency: true
+          discover:
+            find:
+              command:
+                - find
+                - "."
+                - -name
+                - kustomization.yaml
+          generate:
+            command:
+              - sh
+              - "-c"
+              - "kustomize build . | argocd-vault-plugin generate ${ARGOCD_ENV_AVP_DISABLE_TOKEN_CACHE:+--disable-token-cache} -"
+          lockRepo: false
+      avp-helm.yaml: |
+        ---
+        apiVersion: argoproj.io/v1alpha1
+        kind: ConfigManagementPlugin
+        metadata:
+          name: argocd-vault-plugin-helm
+        spec:
+          allowConcurrency: true
+          discover:
+            find:
+              command:
+                - sh
+                - "-c"
+                - "find . -name 'Chart.yaml' && find . -name 'values.yaml'"
+          init:
+            command:
+              - "avp-helm"
+              - "init"
+          generate:
+            command:
+              - sh
+              - "-c"
+              - "eval $(avp-helm generate)"
+          lockRepo: false
+      argocd-vault-plugin-helm-no-discover.yaml: |
+        ---
+        apiVersion: argoproj.io/v1alpha1
+        kind: ConfigManagementPlugin
+        metadata:
+          name: argocd-vault-plugin-helm-no-discover
+        spec:
+          allowConcurrency: true
+          init:
+            command:
+              - "avp-helm"
+              - "init"
+          generate:
+            command:
+              - sh
+              - "-c"
+              - "eval $(avp-helm generate)"
+          lockRepo: false
+      avp.yaml: |
+        ---
+        apiVersion: argoproj.io/v1alpha1
+        kind: ConfigManagementPlugin
+        metadata:
+          name: argocd-vault-plugin
+        spec:
+          allowConcurrency: true
+          discover:
+            find:
+              command:
+                - sh
+                - "-c"
+                - "find . -name '*.yaml' | xargs -I {} grep \"<path\\|avp\\.kubernetes\\.io\" {} | grep ."
+          generate:
+            command:
+              - sh
+              - "-c"
+              - 'argocd-vault-plugin generate ${ARGOCD_ENV_AVP_DISABLE_TOKEN_CACHE:+--disable-token-cache} .'
+          lockRepo: false
+
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRoleBinding
+    metadata:
+      name: argocd-repo-server-auth-delegator
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: ClusterRole
+      name: system:auth-delegator
+    subjects:
+      - kind: ServiceAccount
+        name: argocd-repo-server
+        namespace: {{ .Release.Namespace }}

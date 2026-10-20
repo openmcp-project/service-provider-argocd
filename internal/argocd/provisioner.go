@@ -118,9 +118,6 @@ func (p *Provisioner) Install(ctx context.Context, version apiv1alpha1.ArgoCDVer
 		if err := p.applyManifests(ctx, secretsFS, "secrets"); err != nil {
 			return fmt.Errorf("reconciling secrets: %w", err)
 		}
-		if err := p.applyManifests(ctx, resourcesFS, "configurations/resources"); err != nil {
-			return fmt.Errorf("reconciling resources: %w", err)
-		}
 	}
 
 	if err := p.applyHelmRelease(ctx, version); err != nil {
@@ -424,9 +421,10 @@ func (p *Provisioner) applyHelmRelease(ctx context.Context, version apiv1alpha1.
 		ObjectMeta: metav1.ObjectMeta{Name: helmReleaseName, Namespace: p.tenantNamespace},
 	}
 	values, err := buildValues(version.Values, p.exposure, vaultPluginValues{
-		enabled:  p.vaultPluginEnabled,
-		registry: p.vaultPluginRegistry,
-		tag:      p.vaultPluginTag,
+		enabled:   p.vaultPluginEnabled,
+		registry:  p.vaultPluginRegistry,
+		tag:       p.vaultPluginTag,
+		namespace: p.mcpNamespace,
 	}, version.Version)
 	if err != nil {
 		return fmt.Errorf("building Helm values: %w", err)
