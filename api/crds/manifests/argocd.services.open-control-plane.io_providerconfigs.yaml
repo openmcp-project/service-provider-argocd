@@ -107,6 +107,37 @@ spec:
                 required:
                 - chartVersion
                 type: object
+              vaultPlugin:
+                description: |-
+                  VaultPlugin optionally enables the ArgoCD Vault Plugin (AVP) sidecars on
+                  the ArgoCD repo-server. When set, the provider merges the bundled AVP Helm
+                  values into every HelmRelease it creates, injecting the initContainer and
+                  sidecar containers (avp-helm, avp-helm-no-discover, avp-kustomize, avp)
+                  that the plugin requires. When nil, AVP is not configured.
+                properties:
+                  enabled:
+                    description: |-
+                      Enabled controls whether AVP sidecars are injected into the ArgoCD
+                      repo-server. Setting this to false (or omitting the VaultPlugin field
+                      entirely) leaves ArgoCD untouched.
+                    type: boolean
+                  registry:
+                    description: |-
+                      Registry is the container image registry (repository) for the ArgoCD
+                      Vault Plugin sidecar image. It is combined with Tag to form the image
+                      reference used by the AVP initContainer and sidecar containers.
+                    type: string
+                  tag:
+                    description: |-
+                      Tag is the image tag for the ArgoCD Vault Plugin sidecar image. It is
+                      combined with Registry to form the image reference used by the AVP
+                      initContainer and sidecar containers.
+                    type: string
+                required:
+                - enabled
+                - registry
+                - tag
+                type: object
               versions:
                 description: |-
                   Versions specify the valid inputs for the ArgoCD.Spec.Version field.

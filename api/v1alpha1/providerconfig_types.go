@@ -54,6 +54,45 @@ type ProviderConfigSpec struct {
 	// logged but never affect the lifecycle of the ArgoCD CR.
 	// +optional
 	Reloader *ReloaderConfig `json:"reloader,omitempty"`
+
+	// VaultPlugin optionally enables the ArgoCD Vault Plugin (AVP) sidecars on
+	// the ArgoCD repo-server. When set, the provider merges the bundled AVP Helm
+	// values into every HelmRelease it creates, injecting the initContainer and
+	// sidecar containers (avp-helm, avp-helm-no-discover, avp-kustomize, avp)
+	// that the plugin requires. When nil, AVP is not configured.
+	// +optional
+	VaultPlugin *ProviderVaultPluginConfig `json:"vaultPlugin,omitempty"`
+}
+
+// VaultPluginConfig enables and configures the ArgoCD Vault Plugin (AVP) addon.
+type VaultPluginConfig struct {
+	// Enabled controls whether AVP sidecars are injected into the ArgoCD
+	// repo-server. Setting this to false (or omitting the VaultPlugin field
+	// entirely) leaves ArgoCD untouched.
+	// +required
+	Enabled bool `json:"enabled"`
+}
+
+// ProviderVaultPluginConfig enables and configures the ArgoCD Vault Plugin
+// (AVP) addon at the platform level, including the sidecar image coordinates.
+type ProviderVaultPluginConfig struct {
+	// Enabled controls whether AVP sidecars are injected into the ArgoCD
+	// repo-server. Setting this to false (or omitting the VaultPlugin field
+	// entirely) leaves ArgoCD untouched.
+	// +required
+	Enabled bool `json:"enabled"`
+
+	// Registry is the container image registry (repository) for the ArgoCD
+	// Vault Plugin sidecar image. It is combined with Tag to form the image
+	// reference used by the AVP initContainer and sidecar containers.
+	// +required
+	Registry string `json:"registry"`
+
+	// Tag is the image tag for the ArgoCD Vault Plugin sidecar image. It is
+	// combined with Registry to form the image reference used by the AVP
+	// initContainer and sidecar containers.
+	// +required
+	Tag string `json:"tag"`
 }
 
 // ReloaderConfig describes the Stakater Reloader Helm chart to install
@@ -257,4 +296,23 @@ func (o *ProviderConfig) ReloaderConfig() (ReloaderConfig, bool) {
 		cfg.ChartURL = DefaultReloaderChartURL
 	}
 	return cfg, true
+}
+
+// VaultPluginEnabled reports whether the ArgoCD Vault Plugin addon is enabled
+// in the ProviderConfig. It returns false when VaultPlugin is nil or its
+// Enabled field is false.
+func (o *ProviderConfig) VaultPluginEnabled() bool {
+	if o == nil || o.Spec.VaultPlugin == nil {
+		return false
+	}
+	return o.Spec.VaultPlugin.Enabled
+}
+
+// VaultPluginImage returns the registry and tag configured for the ArgoCD
+// Vault Plugin sidecar image. It returns empty strings when VaultPlugin is nil.
+func (o *ProviderConfig) VaultPluginImage() (registry, tag string) {
+	if o == nil || o.Spec.VaultPlugin == nil {
+		return "", ""
+	}
+	return o.Spec.VaultPlugin.Registry, o.Spec.VaultPlugin.Tag
 }
