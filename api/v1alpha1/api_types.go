@@ -45,6 +45,11 @@ type ArgoCDSpec struct {
 	// unset, ArgoCD is only reachable in-cluster.
 	// +optional
 	Exposure *ServerExposure `json:"exposure,omitempty"`
+
+	// VaultPlugin optionally overrides the platform-level VaultPlugin setting
+	// for this ArgoCD instance. When nil, the ProviderConfig setting is used.
+	// +optional
+	VaultPlugin *VaultPluginConfig `json:"vaultPlugin,omitempty"`
 }
 
 // ServerExposure configures external, TLS-terminated access to the ArgoCD

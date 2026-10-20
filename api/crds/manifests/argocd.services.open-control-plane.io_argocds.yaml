@@ -81,6 +81,20 @@ spec:
                   installed on the target cluster. If empty, the provider's default
                   namespace is used.
                 type: string
+              vaultPlugin:
+                description: |-
+                  VaultPlugin optionally overrides the platform-level VaultPlugin setting
+                  for this ArgoCD instance. When nil, the ProviderConfig setting is used.
+                properties:
+                  enabled:
+                    description: |-
+                      Enabled controls whether AVP sidecars are injected into the ArgoCD
+                      repo-server. Setting this to false (or omitting the VaultPlugin field
+                      entirely) leaves ArgoCD untouched.
+                    type: boolean
+                required:
+                - enabled
+                type: object
               version:
                 description: |-
                   Version selects which ArgoCD version to install. The value must match one
