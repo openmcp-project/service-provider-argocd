@@ -43,6 +43,9 @@ type Provisioner struct {
 	pollInterval time.Duration
 	// exposure holds the resolved external-access intent for the ArgoCD server.
 	exposure ExposureValues
+	// clientValues holds the pre-resolved Helm values from the ArgoCD CR's
+	// spec.values and spec.valuesFrom fields.
+	clientValues map[string]any
 	// reloader, when non-nil, installs the Stakater Reloader addon alongside
 	// ArgoCD. Reloader is best-effort: its failures are logged but never
 	// returned as Install errors.
@@ -58,6 +61,7 @@ type ProvisionerConfig struct {
 	KubeConfigSecretName string
 	PollInterval         time.Duration
 	Exposure             ExposureValues
+	ClientValues         map[string]any
 	Reloader             *apiv1alpha1.ReloaderConfig
 }
 
@@ -75,6 +79,7 @@ func NewProvisioner(cfg ProvisionerConfig) *Provisioner {
 		kubeConfigSecretName: cfg.KubeConfigSecretName,
 		pollInterval:         cfg.PollInterval,
 		exposure:             cfg.Exposure,
+		clientValues:         cfg.ClientValues,
 		reloader:             cfg.Reloader,
 	}
 }
@@ -280,7 +285,7 @@ func (p *Provisioner) applyHelmRelease(ctx context.Context, version apiv1alpha1.
 	hr := &helmv2.HelmRelease{
 		ObjectMeta: metav1.ObjectMeta{Name: helmReleaseName, Namespace: p.tenantNamespace},
 	}
-	values, err := buildValues(version.Values, p.exposure)
+	values, err := buildValues(version.Values, p.clientValues, p.exposure)
 	if err != nil {
 		return fmt.Errorf("building Helm values: %w", err)
 	}

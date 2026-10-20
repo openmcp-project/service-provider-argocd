@@ -20,6 +20,7 @@ import (
 	"time"
 
 	commonapi "github.com/openmcp-project/openmcp-operator/api/common"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
@@ -45,6 +46,20 @@ type ArgoCDSpec struct {
 	// unset, ArgoCD is only reachable in-cluster.
 	// +optional
 	Exposure *ServerExposure `json:"exposure,omitempty"`
+
+	// Values holds optional inline Helm chart values applied on top of any
+	// ValuesFrom sources. They take precedence over ValuesFrom entries but are
+	// overridden by the ProviderConfig operator values.
+	// +optional
+	Values *apiextensionsv1.JSON `json:"values,omitempty"`
+
+	// ValuesFrom lists ConfigMaps or Secrets in the same namespace as this
+	// resource from which Helm chart values are sourced. Entries are merged in
+	// order; later entries take precedence over earlier ones. All ValuesFrom
+	// values are overridden by the inline Values field and by the ProviderConfig
+	// operator values.
+	// +optional
+	ValuesFrom []ValuesReference `json:"valuesFrom,omitempty"`
 }
 
 // ServerExposure configures external, TLS-terminated access to the ArgoCD
@@ -65,6 +80,46 @@ type ServerExposure struct {
 	// CIDR ranges. When empty, the LoadBalancer accepts traffic from any source.
 	// +optional
 	AllowedIPs []string `json:"allowedIPs,omitempty"`
+}
+
+// ValuesReference describes a single ConfigMap or Secret on the onboarding
+// cluster from which Helm chart values are sourced. It mirrors the subset of
+// the Flux HelmRelease ValuesReference API that applies here.
+type ValuesReference struct {
+	// Kind is the type of the values referent. Supported values: ConfigMap, Secret.
+	// +required
+	// +kubebuilder:validation:Enum=ConfigMap;Secret
+	Kind string `json:"kind"`
+
+	// Name is the metadata name of the values referent in the same namespace
+	// as the ArgoCD resource.
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+
+	// ValuesKey is the data key in the referent at which the values can be
+	// found. Defaults to 'values.yaml'.
+	// +optional
+	ValuesKey string `json:"valuesKey,omitempty"`
+
+	// TargetPath is the YAML dot-notation path at which the value should be
+	// merged. When set, the referent's ValuesKey content is treated as a single
+	// scalar placed at this path rather than as a complete values object.
+	// Dots in path segments can be escaped with a backslash (e.g. 'a\.b').
+	// +optional
+	TargetPath string `json:"targetPath,omitempty"`
+
+	// Literal when true instructs the controller to use the value verbatim at
+	// TargetPath without interpreting Helm's --set special characters (commas,
+	// brackets, dots, equal signs). Mirrors helm --set-literal. Has no effect
+	// when TargetPath is empty. Defaults to false.
+	// +optional
+	Literal bool `json:"literal,omitempty"`
+
+	// Optional marks the reference as optional. When true a missing ConfigMap
+	// or Secret is silently ignored; other errors are still propagated.
+	// +optional
+	Optional bool `json:"optional,omitempty"`
 }
 
 // ArgoCDStatus defines the observed state of ArgoCD.

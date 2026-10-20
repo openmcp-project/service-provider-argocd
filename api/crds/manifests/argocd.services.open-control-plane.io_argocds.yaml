@@ -81,6 +81,67 @@ spec:
                   installed on the target cluster. If empty, the provider's default
                   namespace is used.
                 type: string
+              values:
+                description: |-
+                  Values holds optional inline Helm chart values applied on top of any
+                  ValuesFrom sources. They take precedence over ValuesFrom entries but are
+                  overridden by the ProviderConfig operator values.
+                x-kubernetes-preserve-unknown-fields: true
+              valuesFrom:
+                description: |-
+                  ValuesFrom lists ConfigMaps or Secrets in the same namespace as this
+                  resource from which Helm chart values are sourced. Entries are merged in
+                  order; later entries take precedence over earlier ones. All ValuesFrom
+                  values are overridden by the inline Values field and by the ProviderConfig
+                  operator values.
+                items:
+                  description: |-
+                    ValuesReference describes a single ConfigMap or Secret on the onboarding
+                    cluster from which Helm chart values are sourced. It mirrors the subset of
+                    the Flux HelmRelease ValuesReference API that applies here.
+                  properties:
+                    kind:
+                      description: 'Kind is the type of the values referent. Supported
+                        values: ConfigMap, Secret.'
+                      enum:
+                      - ConfigMap
+                      - Secret
+                      type: string
+                    literal:
+                      description: |-
+                        Literal when true instructs the controller to use the value verbatim at
+                        TargetPath without interpreting Helm's --set special characters (commas,
+                        brackets, dots, equal signs). Mirrors helm --set-literal. Has no effect
+                        when TargetPath is empty. Defaults to false.
+                      type: boolean
+                    name:
+                      description: |-
+                        Name is the metadata name of the values referent in the same namespace
+                        as the ArgoCD resource.
+                      minLength: 1
+                      type: string
+                    optional:
+                      description: |-
+                        Optional marks the reference as optional. When true a missing ConfigMap
+                        or Secret is silently ignored; other errors are still propagated.
+                      type: boolean
+                    targetPath:
+                      description: |-
+                        TargetPath is the YAML dot-notation path at which the value should be
+                        merged. When set, the referent's ValuesKey content is treated as a single
+                        scalar placed at this path rather than as a complete values object.
+                        Dots in path segments can be escaped with a backslash (e.g. 'a\.b').
+                      type: string
+                    valuesKey:
+                      description: |-
+                        ValuesKey is the data key in the referent at which the values can be
+                        found. Defaults to 'values.yaml'.
+                      type: string
+                  required:
+                  - kind
+                  - name
+                  type: object
+                type: array
               version:
                 description: |-
                   Version selects which ArgoCD version to install. The value must match one

@@ -102,7 +102,7 @@ func (r *ArgoCDReconciler) CreateOrUpdate(ctx context.Context, obj *apiv1alpha1.
 
 	warnIfExposureWithoutReloader(ctx, obj, pc)
 
-	provisioner, err := r.newProvisioner(obj, pc, clusterCtx)
+	provisioner, err := r.provisionerFor(ctx, obj, pc, clusterCtx)
 	if err != nil {
 		log.Error(err, "failed to create provisioner")
 		argocd.StatusFailed(obj, reasonProvisionerCreationFailed, err.Error())
@@ -168,7 +168,7 @@ func (r *ArgoCDReconciler) Delete(ctx context.Context, obj *apiv1alpha1.ArgoCD, 
 	log := logf.FromContext(ctx)
 	serviceprovider.StatusTerminatingWithReason(obj, reasonTerminating, "Resource termination initiated; cleanup tasks are in progress")
 
-	provisioner, err := r.newProvisioner(obj, pc, clusterCtx)
+	provisioner, err := r.newProvisioner(obj, pc, clusterCtx, nil)
 	if err != nil {
 		log.Error(err, "failed to create provisioner")
 		argocd.StatusFailed(obj, reasonProvisionerCreationFailed, err.Error())
@@ -208,10 +208,21 @@ func (r *ArgoCDReconciler) Delete(ctx context.Context, obj *apiv1alpha1.ArgoCD, 
 	return ctrl.Result{}, nil
 }
 
+// provisionerFor resolves client values from the ArgoCD CR and builds a
+// Provisioner for the given reconcile request. Used only on the create/update
+// path where client values must be applied to the HelmRelease.
+func (r *ArgoCDReconciler) provisionerFor(ctx context.Context, obj *apiv1alpha1.ArgoCD, pc *apiv1alpha1.ProviderConfig, clusterCtx clusteraccess.ClusterContext) (*argocd.Provisioner, error) {
+	clientValues, err := argocd.ResolveClientValues(ctx, r.OnboardingCluster.Client(), obj)
+	if err != nil {
+		return nil, fmt.Errorf("resolving client values: %w", err)
+	}
+	return r.newProvisioner(obj, pc, clusterCtx, clientValues)
+}
+
 // newProvisioner builds a Provisioner for the given reconcile request. The Flux
 // resources live in the MCP's tenant namespace on the platform cluster, next to
 // the MCP kubeconfig secret that the HelmRelease references.
-func (r *ArgoCDReconciler) newProvisioner(obj *apiv1alpha1.ArgoCD, pc *apiv1alpha1.ProviderConfig, clusterCtx clusteraccess.ClusterContext) (*argocd.Provisioner, error) {
+func (r *ArgoCDReconciler) newProvisioner(obj *apiv1alpha1.ArgoCD, pc *apiv1alpha1.ProviderConfig, clusterCtx clusteraccess.ClusterContext, clientValues map[string]any) (*argocd.Provisioner, error) {
 	tenantNamespace := clusterCtx.MCPAccessSecretKey.Namespace
 	if tenantNamespace == "" {
 		// Fall back to a stable, deterministic namespace derived from the request.
@@ -230,6 +241,7 @@ func (r *ArgoCDReconciler) newProvisioner(obj *apiv1alpha1.ArgoCD, pc *apiv1alph
 		KubeConfigSecretName: clusterCtx.MCPAccessSecretKey.Name,
 		PollInterval:         pc.PollInterval(),
 		Exposure:             resolveExposure(obj, pc, clusterCtx.MCPCluster.APIServerEndpoint()),
+		ClientValues:         clientValues,
 		Reloader:             resolveReloader(pc),
 	}), nil
 }
