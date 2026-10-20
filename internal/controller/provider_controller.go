@@ -222,6 +222,8 @@ func (r *ArgoCDReconciler) newProvisioner(obj *apiv1alpha1.ArgoCD, pc *apiv1alph
 		tenantNamespace = ns
 	}
 
+	vaultRegistry, vaultTag := pc.VaultPluginImage()
+
 	return argocd.NewProvisioner(argocd.ProvisionerConfig{
 		PlatformClient:       r.PlatformCluster.Client(),
 		MCPClient:            clusterCtx.MCPCluster.Client(),
@@ -231,6 +233,9 @@ func (r *ArgoCDReconciler) newProvisioner(obj *apiv1alpha1.ArgoCD, pc *apiv1alph
 		PollInterval:         pc.PollInterval(),
 		Exposure:             resolveExposure(obj, pc, clusterCtx.MCPCluster.APIServerEndpoint()),
 		Reloader:             resolveReloader(pc),
+		VaultPluginEnabled:   resolveVaultPlugin(obj, pc),
+		VaultPluginRegistry:  vaultRegistry,
+		VaultPluginTag:       vaultTag,
 	}), nil
 }
 
@@ -348,6 +353,19 @@ func resolveReloader(pc *apiv1alpha1.ProviderConfig) *apiv1alpha1.ReloaderConfig
 		return nil
 	}
 	return &cfg
+}
+
+// resolveVaultPlugin returns true when the ArgoCD Vault Plugin should be
+// enabled for this instance. The ProviderConfig acts as a gate: if VaultPlugin
+// is not enabled at the platform level it is always disabled regardless of what
+// the ArgoCD CR requests. When the platform allows it, the ArgoCD CR's
+// spec.vaultPlugin.enabled decides; if the CR omits the field it defaults to
+// false.
+func resolveVaultPlugin(obj *apiv1alpha1.ArgoCD, pc *apiv1alpha1.ProviderConfig) bool {
+	if !pc.VaultPluginEnabled() {
+		return false
+	}
+	return obj.Spec.VaultPlugin.Enabled && pc.Spec.VaultPlugin.Enabled
 }
 
 // warnIfExposureWithoutReloader logs when a tenant requests exposure but the
