@@ -27,7 +27,6 @@ func TestMain(m *testing.M) {
 	version := mustVersion()
 	openmcp := setup.OpenMCPSetup{
 		Namespace: "openmcp-system",
-		WaitOpts:  []wait.Option{wait.WithTimeout(15 * time.Minute)},
 		Operator: setup.OpenMCPOperatorSetup{
 			Name: "openmcp-operator",
 			// renovate: datasource=docker depName=ghcr.io/openmcp-project/images/openmcp-operator

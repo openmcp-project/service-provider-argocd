@@ -21,7 +21,6 @@ import (
 	apiv1alpha1 "github.com/openmcp-project/service-provider-argocd/api/v1alpha1"
 )
 
-
 func newTestScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	scheme := runtime.NewScheme()
@@ -140,7 +139,7 @@ func TestProvisionerRemoveImagePullSecrets_DeletesAllManaged(t *testing.T) {
 	}
 	if err := mcpClient.Get(ctx, client.ObjectKey{Name: "unmanaged", Namespace: mcpNamespace}, &corev1.Secret{}); err != nil {
 		t.Fatalf("expected unmanaged secret to remain, got err=%v", err)
-    }
+	}
 }
 
 const (
