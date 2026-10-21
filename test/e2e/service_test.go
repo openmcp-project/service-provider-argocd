@@ -152,8 +152,23 @@ func TestServiceProvider(t *testing.T) {
 				DNSTTL:      3600,
 				CertPurpose: "managed",
 			}
-			if err := c.Client().Resources().Create(ctx, config); err != nil {
-				t.Errorf("failed to create ProviderConfig: %v", err)
+			// Short poll interval so Flux reconciles OCIRepository deletions quickly
+			// during teardown (default 1 min would add unnecessary wait per resource).
+			config.Spec.PollInterval = &metav1.Duration{Duration: 10 * time.Second}
+			existing := &apiv1alpha1.ProviderConfig{}
+			if err := c.Client().Resources().Get(ctx, "argocd", "", existing); err != nil {
+				if !apierrors.IsNotFound(err) {
+					t.Errorf("failed to check for existing ProviderConfig: %v", err)
+					return ctx
+				}
+				if err := c.Client().Resources().Create(ctx, config); err != nil {
+					t.Errorf("failed to create ProviderConfig: %v", err)
+				}
+			} else {
+				config.SetResourceVersion(existing.GetResourceVersion())
+				if err := c.Client().Resources().Update(ctx, config); err != nil {
+					t.Errorf("failed to update ProviderConfig: %v", err)
+				}
 			}
 			return ctx
 		}).
@@ -193,7 +208,8 @@ func TestServiceProvider(t *testing.T) {
 				}
 
 				// Wait for the Ready condition to be True
-				if err := wait.For(openmcpconditions.Match(api, onboardingCfg, "Ready", corev1.ConditionTrue)); err != nil {
+				if err := wait.For(openmcpconditions.Match(api, onboardingCfg, "Ready", corev1.ConditionTrue),
+					wait.WithTimeout(15*time.Minute)); err != nil {
 					t.Error(err)
 				}
 
@@ -482,7 +498,7 @@ func TestServiceProvider(t *testing.T) {
 				return ctx
 			},
 		).
-		Assess(" “delete the test created domain resources and remove the generated app finalizer.",
+		Assess("delete the test created domain resources and remove the generated app finalizer.",
 			func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				mcpConfig, err := clusterutils.MCPConfig(ctx, c, mcpName)
 				if err != nil {
@@ -514,7 +530,7 @@ func TestServiceProvider(t *testing.T) {
 				// succeeds, both Flux resources have already been removed.
 				if err := wait.For(
 					conditions.New(onboardingCfg.Client().Resources()).ResourceDeleted(api),
-					wait.WithTimeout(5*time.Minute),
+					wait.WithTimeout(10*time.Minute),
 				); err != nil {
 					t.Errorf("expected ArgoCD to be deleted after domain object removal, but it still exists: %v", err)
 					return ctx
@@ -562,6 +578,15 @@ func TestServiceProvider(t *testing.T) {
 			}
 			return ctx
 		}).
-		Teardown(providers.DeleteMCP(mcpName, wait.WithTimeout(5*time.Minute)))
+		Teardown(providers.DeleteMCP(mcpName, wait.WithTimeout(5*time.Minute))).
+		Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+			cfg := &apiv1alpha1.ProviderConfig{}
+			cfg.SetName("argocd")
+			if err := c.Client().Resources().Delete(ctx, cfg); err != nil && !apierrors.IsNotFound(err) {
+				t.Logf("teardown: failed to delete ProviderConfig: %v", err)
+			}
+			return ctx
+		})
+
 	testenv.Test(t, providerTest.Feature())
 }

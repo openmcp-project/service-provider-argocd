@@ -10,10 +10,12 @@ import (
 	apiv1alpha1 "github.com/openmcp-project/service-provider-argocd/api/v1alpha1"
 	"github.com/openmcp-project/service-provider-argocd/internal/argocd"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/e2e-framework/klient/wait"
+	"sigs.k8s.io/e2e-framework/klient/wait/conditions"
 
 	openmcpconditions "github.com/openmcp-project/openmcp-testing/pkg/conditions"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
@@ -33,9 +35,8 @@ func TestStatusFailed(t *testing.T) {
 	statusFailedTest := features.New("status failed reporting").
 		Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 			apiv1alpha1.AddToScheme(c.Client().Resources().GetScheme())
-			providerConfigName := "argocd-" + time.Now().Format("20060102150405")
 			config := &apiv1alpha1.ProviderConfig{}
-			config.SetName(providerConfigName)
+			config.SetName("argocd")
 
 			config.Spec.Versions = []apiv1alpha1.ArgoCDVersion{
 				{
@@ -44,19 +45,26 @@ func TestStatusFailed(t *testing.T) {
 					ChartURL:     ptr.To(testArgoCDChartURL),
 				},
 			}
-			if err := c.Client().Resources().Create(ctx, config); err != nil {
-				t.Errorf("failed to create ProviderConfig object: %v", err)
-			}
-
-			// Add cleanup logic to delete the ProviderConfig after the test
-			defer func() {
-				if err := c.Client().Resources().Delete(ctx, config); err != nil {
-					t.Logf("failed to clean up ProviderConfig: %v", err)
+			config.Spec.PollInterval = &metav1.Duration{Duration: 10 * time.Second}
+			existing := &apiv1alpha1.ProviderConfig{}
+			if err := c.Client().Resources().Get(ctx, "argocd", "", existing); err != nil {
+				if !apierrors.IsNotFound(err) {
+					t.Errorf("failed to check for existing ProviderConfig: %v", err)
+					return ctx
 				}
-			}()
+				if err := c.Client().Resources().Create(ctx, config); err != nil {
+					t.Errorf("failed to create ProviderConfig object: %v", err)
+				}
+			} else {
+				config.SetResourceVersion(existing.GetResourceVersion())
+				if err := c.Client().Resources().Update(ctx, config); err != nil {
+					t.Errorf("failed to update ProviderConfig: %v", err)
+				}
+			}
 
 			return ctx
 		}).
+
 		Setup(providers.CreateMCP("test-status-failed", wait.WithTimeout(15*time.Minute))).
 		Assess("StatusFailed sets Ready=False with reason InvalidVersion for an unknown version",
 			func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
@@ -119,6 +127,35 @@ func TestStatusFailed(t *testing.T) {
 				return ctx
 			},
 		).
-		Teardown(providers.DeleteMCP("test-status-failed", wait.WithTimeout(5*time.Minute)))
+		Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+			onboardingCfg, err := clusterutils.OnboardingConfig()
+			if err != nil {
+				t.Logf("teardown: failed to get onboarding config: %v", err)
+				return ctx
+			}
+			apiv1alpha1.AddToScheme(onboardingCfg.Client().Resources().GetScheme())
+			api := &apiv1alpha1.ArgoCD{}
+			api.SetName("test-status-failed")
+			api.SetNamespace("default")
+			if err := onboardingCfg.Client().Resources().Delete(ctx, api); err != nil && !apierrors.IsNotFound(err) {
+				t.Logf("teardown: failed to delete ArgoCD CR: %v", err)
+			}
+			if err := wait.For(
+				conditions.New(onboardingCfg.Client().Resources()).ResourceDeleted(api),
+				wait.WithTimeout(5*time.Minute),
+			); err != nil {
+				t.Logf("teardown: ArgoCD CR not fully deleted within timeout: %v", err)
+			}
+			return ctx
+		}).
+		Teardown(providers.DeleteMCP("test-status-failed", wait.WithTimeout(5*time.Minute))).
+		Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+			cfg := &apiv1alpha1.ProviderConfig{}
+			cfg.SetName("argocd")
+			if err := c.Client().Resources().Delete(ctx, cfg); err != nil && !apierrors.IsNotFound(err) {
+				t.Logf("teardown: failed to delete ProviderConfig: %v", err)
+			}
+			return ctx
+		})
 	testenv.Test(t, statusFailedTest.Feature())
 }
