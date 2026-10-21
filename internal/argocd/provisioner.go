@@ -413,7 +413,7 @@ func (p *Provisioner) applyReloaderHelmRelease(ctx context.Context) error {
 // previously-replicated secret that is no longer referenced.
 func (p *Provisioner) reconcileImagePullSecrets(ctx context.Context, values *apiextensionsv1.JSON) error {
 	names, err := ImagePullSecretNames(values)
-	logf.FromContext(ctx).V(1).Info("reconciling image pull secrets stan1", "names", names)
+	logf.FromContext(ctx).V(1).Info("reconciling image pull secrets", "names", names)
 	if err != nil {
 		return err
 	}
