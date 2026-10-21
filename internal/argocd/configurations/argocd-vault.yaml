@@ -282,3 +282,10 @@ extraObjects:
       - kind: ServiceAccount
         name: argocd-repo-server
         namespace: {{ .Release.Namespace }}
+
+  - apiVersion: v1
+    kind: Secret
+    metadata:
+      name: vault-configuration
+    type: Opaque
+    stringData: {}
