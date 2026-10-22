@@ -1,12 +1,8 @@
 package argocd
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"io/fs"
-	"strings"
-	"text/template"
 	"time"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -15,7 +11,6 @@ import (
 	fluxmeta "github.com/fluxcd/pkg/apis/meta"
 	"github.com/fluxcd/pkg/runtime/conditions"
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
-	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -23,7 +18,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/yaml"
 
 	apiv1alpha1 "github.com/openmcp-project/service-provider-argocd/api/v1alpha1"
 )
@@ -108,16 +102,6 @@ func (p *Provisioner) Install(ctx context.Context, version apiv1alpha1.ArgoCDVer
 
 	if err := p.applyOCIRepository(ctx, version); err != nil {
 		return fmt.Errorf("reconciling OCIRepository: %w", err)
-	}
-
-	if err := p.ensureNamespace(ctx); err != nil {
-		return fmt.Errorf("ensuring namespace: %w", err)
-	}
-
-	if p.vaultPluginEnabled {
-		if err := p.applyManifests(ctx, secretsFS, "secrets"); err != nil {
-			return fmt.Errorf("reconciling secrets: %w", err)
-		}
 	}
 
 	if err := p.applyHelmRelease(ctx, version); err != nil {
@@ -282,115 +266,6 @@ func (p *Provisioner) countResourcesByGVK(ctx context.Context, gvk schema.GroupV
 	return len(list.Items), nil
 }
 
-// ensureNamespace creates the ArgoCD target namespace on the MCP if it does
-// not already exist. It is required before applying bundled secrets, since the
-// secrets are written directly by the provider ahead of Flux creating the
-// namespace via the HelmRelease. It is idempotent.
-func (p *Provisioner) ensureNamespace(ctx context.Context) error {
-	ns := &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{Name: p.mcpNamespace},
-	}
-	if _, err := controllerutil.CreateOrUpdate(ctx, p.mcpClient, ns, func() error {
-		setManagedByValue(ns, managedByArgoCDValue)
-		return nil
-	}); err != nil {
-		return fmt.Errorf("applying namespace %q: %w", p.mcpNamespace, err)
-	}
-	return nil
-}
-
-// applyManifests walks an embedded folder, decodes every YAML document into an
-// unstructured object, forces it into the ArgoCD namespace on the MCP, and
-// server-side applies it. It supports any Kubernetes kind as well as multi-
-// document files, so new bootstrap resources can be added simply by dropping a
-// manifest into the folder — no per-type Go code is required. It is idempotent.
-func (p *Provisioner) applyManifests(ctx context.Context, fsys fs.FS, root string) error {
-	return fs.WalkDir(fsys, root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() || !isYAMLFile(path) {
-			return nil
-		}
-		return p.applyManifestFile(ctx, fsys, path)
-	})
-}
-
-// applyManifestFile reads, renders, and server-side applies every YAML document
-// contained in a single embedded manifest file.
-func (p *Provisioner) applyManifestFile(ctx context.Context, fsys fs.FS, path string) error {
-	raw, err := fs.ReadFile(fsys, path)
-	if err != nil {
-		return fmt.Errorf("reading embedded manifest %q: %w", path, err)
-	}
-
-	rendered, err := p.renderManifest(raw)
-	if err != nil {
-		return fmt.Errorf("rendering embedded manifest %q: %w", path, err)
-	}
-
-	for i, doc := range splitYAMLDocuments(rendered) {
-		obj := &unstructured.Unstructured{}
-		if err := yaml.Unmarshal(doc, &obj.Object); err != nil {
-			return fmt.Errorf("decoding embedded manifest %q (document %d): %w", path, i, err)
-		}
-		// Skip empty documents (e.g. a trailing "---" or comments-only block).
-		if len(obj.Object) == 0 || obj.GetKind() == "" {
-			continue
-		}
-
-		obj.SetNamespace(p.mcpNamespace)
-		setManagedByValue(obj, managedByArgoCDValue)
-
-		if err := p.mcpClient.Apply(ctx, client.ApplyConfigurationFromUnstructured(obj),
-			client.FieldOwner(managedByArgoCDValue), client.ForceOwnership); err != nil {
-			return fmt.Errorf("applying %s %q from %q: %w", obj.GetKind(), obj.GetName(), path, err)
-		}
-	}
-	return nil
-}
-
-// renderManifest treats the raw manifest bytes as a Go text/template and
-// substitutes the supported values before the YAML is parsed. This lets
-// embedded manifests reference the ArgoCD namespace via the Helm-style
-// {{ .Release.Namespace }} expression without being rendered by Helm itself.
-func (p *Provisioner) renderManifest(raw []byte) ([]byte, error) {
-	tmpl, err := template.New("manifest").Option("missingkey=error").Parse(string(raw))
-	if err != nil {
-		return nil, fmt.Errorf("parsing template: %w", err)
-	}
-
-	data := map[string]any{
-		"Release": map[string]any{
-			"Namespace": p.mcpNamespace,
-		},
-	}
-
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, data); err != nil {
-		return nil, fmt.Errorf("executing template: %w", err)
-	}
-
-	return buf.Bytes(), nil
-}
-
-// isYAMLFile reports whether path has a YAML file extension.
-func isYAMLFile(path string) bool {
-	return strings.HasSuffix(path, ".yaml") || strings.HasSuffix(path, ".yml")
-}
-
-// splitYAMLDocuments splits a multi-document YAML byte slice on the "---"
-// document separator, returning the individual documents. Empty documents are
-// preserved and filtered by the caller.
-func splitYAMLDocuments(raw []byte) [][]byte {
-	parts := strings.Split(string(raw), "\n---")
-	docs := make([][]byte, 0, len(parts))
-	for _, part := range parts {
-		docs = append(docs, []byte(strings.TrimPrefix(part, "---")))
-	}
-	return docs
-}
-
 // applyOCIRepository creates or updates the OCIRepository that points at the
 // ArgoCD Helm chart.
 func (p *Provisioner) applyOCIRepository(ctx context.Context, version apiv1alpha1.ArgoCDVersion) error {
@@ -447,7 +322,7 @@ func (p *Provisioner) applyHelmRelease(ctx context.Context, version apiv1alpha1.
 			},
 			Install: &helmv2.Install{
 				CRDs:            helmv2.Create,
-				CreateNamespace: false,
+				CreateNamespace: true,
 				Remediation:     &helmv2.InstallRemediation{Retries: 3},
 			},
 			Upgrade: &helmv2.Upgrade{

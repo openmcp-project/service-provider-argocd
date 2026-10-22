@@ -32,11 +32,11 @@ import (
 // requested by the ArgoCD resource. Keep these in sync with the chart that is
 // actually published at the given URL.
 const (
-	testArgoCDVersion        = "3.3.9"
-	testArgoCDChartVersion   = "9.5.11"
-	testArgoCDChartURL       = "oci://ghcr.io/argoproj/argo-helm/argo-cd"
-	deployReleasesImagesRepo = "deploy-releases.common.repositories.cloud.sap/com.sap.argocdaas/"
-	sidecarImageTag          = "2.0.27"
+	testArgoCDVersion      = "v3.5.4"
+	testArgoCDChartVersion = "10.4.0"
+	testArgoCDChartURL     = "oci://ghcr.io/argoproj/argo-helm/argo-cd"
+	imagesRepo             = "openmcp.common.repositories.cloud.sap/sovereigncloud-outbound/dev1/github.tools.sap/openmcp/releasechannel/argocd/images/"
+	sidecarImageTag        = "2.0.27"
 
 	// Reloader test fixtures — keep in sync with the Stakater chart.
 	testReloaderChartVersion = "2.2.12"
@@ -86,7 +86,7 @@ func TestServiceProvider(t *testing.T) {
 			config.SetName("argocd")
 			config.Spec.VaultPlugin = &apiv1alpha1.ProviderVaultPluginConfig{
 				Enabled:  true,
-				Registry: deployReleasesImagesRepo + "argocd-sidecar",
+				Registry: imagesRepo + "argocd-sidecar",
 				Tag:      sidecarImageTag,
 			}
 			config.Spec.Versions = []apiv1alpha1.ArgoCDVersion{
@@ -95,7 +95,7 @@ func TestServiceProvider(t *testing.T) {
 					ChartVersion: testArgoCDChartVersion,
 					ChartURL:     ptr.To(testArgoCDChartURL),
 					Values: &apiextensionsv1.JSON{
-						Raw: []byte(`{"global":{"image":{"repository":"` + deployReleasesImagesRepo + "argocd" + `","tag":"` + testArgoCDVersion + `"}}}`),
+						Raw: []byte(`{"global":{"image":{"repository":"` + imagesRepo + "argocd" + `","tag":"` + testArgoCDVersion + `"}}}`),
 					},
 				},
 			}

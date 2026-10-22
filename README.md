@@ -55,6 +55,9 @@ spec:
   version: "v3.1.0"
   # Optional: namespace on the ManagedControlPlane to install Argo CD into.
   namespaceOverride: argocd
+  # Enable/Disable Argo CD Vault Plugin
+  vaultPlugin:
+    enabled: false
   # Optional: expose the Argo CD server externally via a TLS-terminated
   # LoadBalancer (see "Exposure" below). Omit to keep Argo CD in-cluster only.
   exposure:
@@ -71,6 +74,7 @@ spec:
 | `spec.exposure`          | object | Optional external exposure of the Argo CD server. Its presence enables exposure.      |
 | `spec.exposure.host`     | string | Sub-domain label (e.g. `argocd`) or a fully-qualified domain name. A bare label is completed with the shoot's root domain, derived from the MCP apiserver host. |
 | `spec.exposure.allowedIPs` | array | Optional CIDR ranges allowed to reach the LoadBalancer. Empty means all sources. Invalid CIDRs are rejected. |
+| `spec.vaultPlugin.enabled` | bool | Enable/Disable Argo CD Vault Plugin.                                                  |
 | `status.endpoint`        | string | The externally reachable URL, published only once exposure is provisioned and ready.  |
 
 
@@ -91,6 +95,11 @@ spec:
     dnsClass: garden
     dnsTTL: 3600
     certPurpose: managed
+  # Enable or Disable Argo CD Vault Plugin
+  vaultPlugin:
+    enabled: false
+    registry: "ghcr-remote.common.repositories.cloud.sap/argocd-sidecar"
+    tag: "2.0.27"
   # Optional: install the Stakater Reloader addon alongside Argo CD so
   # argocd-server restarts when its managed TLS certificate rotates.
   reloader:
@@ -104,7 +113,7 @@ spec:
       chartUrl: "oci://ghcr.io/argoproj/argo-helm/argo-cd"
       # Optional: Secret for a private chart registry (must exist in the controller namespace).
       chartPullSecret: privateregcred
-      # Optional: custom Helm values passed to the managed HelmRelease.
+      # Custom Helm values passed to the managed HelmRelease. If AVP is enabled, global.image.repository and global.image.tag must be specified.
       values:
         global:
           image:
@@ -123,6 +132,9 @@ spec:
 | `spec.reloader.chartUrl`          | string   | OCI registry URL for the Reloader chart (default: Stakater public chart).|
 | `spec.reloader.chartPullSecret`   | string   | Secret name for chart registry authentication.                           |
 | `spec.reloader.values`            | object   | Custom Helm values for the Reloader deployment.                          |
+| `spec.vaultPlugin.enabled`        | bool     | Enable/Disable AVP.                                                      |
+| `spec.vaultPlugin.registry`       | string   | Registry with specified repository in which AVP docker image lives.      |
+| `spec.vaultPlugin.tag`            | string   | AVP docker image tag.                                                    |
 | `spec.versions`                   | array    | The Argo CD versions that can be installed.                              |
 | `spec.versions[].version`         | string   | Argo CD version that maps to `ArgoCD.spec.version`.                      |
 | `spec.versions[].chartVersion`    | string   | Helm chart version to install.                                          |

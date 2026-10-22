@@ -1,9 +1,8 @@
 package argocd
 
 import (
-	// "bytes"
 	"bytes"
-	"embed"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -12,14 +11,10 @@ import (
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"sigs.k8s.io/yaml"
-	// "sigs.k8s.io/yaml"
 )
 
 //go:embed configurations/argocd-vault.yaml
 var argocdVaultYAML []byte
-
-//go:embed secrets/*.yaml
-var secretsFS embed.FS
 
 // ExposureValues carries the fully-resolved exposure intent, combining the
 // tenant's request (host, allowed IPs) with the platform policy (DNS class,
