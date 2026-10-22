@@ -33,6 +33,13 @@ func TestMain(m *testing.M) {
 			Image:        "ghcr.io/openmcp-project/images/openmcp-operator:v1.4.2",
 			Environment:  "debug",
 			PlatformName: "platform",
+			// The operator Deployment's own readiness wait (inside
+			// openmcp-testing's installOpenMCPOperator) uses this WaitOpts
+			// field specifically — it is not covered by the top-level
+			// OpenMCPSetup.WaitOpts below. Without it, klient/wait's 5-minute
+			// default fires before a cold image pull / cluster warm-up on a
+			// busy host completes, even though nothing is actually stuck.
+			WaitOpts: []wait.Option{wait.WithTimeout(15 * time.Minute)},
 		},
 		ClusterProviders: []providers.ClusterProviderSetup{
 			{
@@ -47,6 +54,10 @@ func TestMain(m *testing.M) {
 				Name:               "argocd",
 				Image:              fmt.Sprintf("ghcr.io/openmcp-project/images/service-provider-argocd:%s", version),
 				LoadImageToCluster: true,
+				// Same reasoning as Operator.WaitOpts above: InstallServiceProvider
+				// waits on this field specifically for the ServiceProvider to go
+				// Ready, and otherwise falls back to the 5-minute default.
+				WaitOpts: []wait.Option{wait.WithTimeout(15 * time.Minute)},
 			},
 		},
 		Extensions: []extensions.Extension{
