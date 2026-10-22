@@ -28,6 +28,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
+	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 
 	"github.com/openmcp-project/controller-utils/pkg/clusters"
@@ -249,23 +250,37 @@ func (r *ArgoCDReconciler) newProvisioner(obj *apiv1alpha1.ArgoCD, pc *apiv1alph
 // IsReferencedSecret implements serviceprovider.SecretWatcher. It reports
 // whether the given Secret (observed in PodNamespace on the platform cluster)
 // is referenced by any configured ArgoCD version's
-// values.global.imagePullSecrets, so that changes to it (e.g. credential
-// rotation) trigger reconciliation of all ArgoCD resources.
+// values.global.imagePullSecrets or chartPullSecret, or by the Reloader
+// addon's chartPullSecret, so that changes to it (e.g. credential rotation)
+// trigger reconciliation of all ArgoCD resources.
 func (r *ArgoCDReconciler) IsReferencedSecret(ctx context.Context, secret *corev1.Secret, pc *apiv1alpha1.ProviderConfig) bool {
 	if secret == nil || secret.Namespace != r.PodNamespace || pc == nil {
 		return false
 	}
 	log := logf.FromContext(ctx)
 	for _, version := range pc.Spec.Versions {
-		names, err := argocd.ImagePullSecretNames(version.Values)
-		if err != nil {
-			log.Error(err, "failed to extract image pull secret names from provider config version", "version", version.Version)
-			continue
+		if versionReferencesSecret(log, version, secret.Name) {
+			return true
 		}
-		for _, name := range names {
-			if name == secret.Name {
-				return true
-			}
+	}
+	return pc.Spec.Reloader != nil && pc.Spec.Reloader.ChartPullSecret == secret.Name
+}
+
+// versionReferencesSecret reports whether the given ArgoCD version references
+// secretName, either as its chartPullSecret or anywhere in
+// values.global.imagePullSecrets.
+func versionReferencesSecret(log logr.Logger, version apiv1alpha1.ArgoCDVersion, secretName string) bool {
+	if version.ChartPullSecret == secretName {
+		return true
+	}
+	names, err := argocd.ImagePullSecretNames(version.Values)
+	if err != nil {
+		log.Error(err, "failed to extract image pull secret names from provider config version", "version", version.Version)
+		return false
+	}
+	for _, name := range names {
+		if name == secretName {
+			return true
 		}
 	}
 	return false

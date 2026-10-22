@@ -60,6 +60,13 @@ const (
 	// ensureCABundle. It allows removeCABundle to find and delete the secret
 	// by label when caBundleSecret has been cleared from the ProviderConfig.
 	caBundleLabel = "argocd.services.open-control-plane.io/ca-bundle"
+
+	// chartPullSecretLabel is stamped on Secrets replicated into the tenant
+	// namespace (platform cluster) by copyChartPullSecret. Unlike the image
+	// pull secrets replicated to the MCP, chart pull secret names are
+	// arbitrary and not fixed per version, so pruning relies on this label
+	// rather than on the managed-by value alone.
+	chartPullSecretLabel = "argocd.services.open-control-plane.io/chart-pull-secret"
 )
 
 // imagePullSecretManagedByValue marks Secrets that this provider has copied

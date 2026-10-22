@@ -83,9 +83,13 @@ type ReloaderConfig struct {
 	// +required
 	ChartVersion string `json:"chartVersion"`
 
-	// ChartPullSecret is the name of a Secret in the service provider's
-	// namespace containing credentials to pull the chart from a private OCI
-	// registry.
+	// ChartPullSecret is the name of a Secret in the service provider's own
+	// namespace (the namespace the service-provider-argocd Pod runs in)
+	// containing credentials to pull the chart from a private OCI registry.
+	// The controller copies it from there into the tenant namespace on the
+	// platform cluster (the same namespace as the Reloader OCIRepository,
+	// which references it via spec.secretRef), keeps it in sync, and removes
+	// it again once no longer referenced.
 	// +optional
 	ChartPullSecret string `json:"chartPullSecret,omitempty"`
 
@@ -130,9 +134,14 @@ type ArgoCDVersion struct {
 	// +kubebuilder:default="oci://ghcr.io/argoproj/argo-helm/argo-cd"
 	ChartURL *string `json:"chartUrl,omitempty"`
 
-	// ChartPullSecret is the name of a Secret in the service provider's namespace
-	// containing credentials to pull the Helm chart from a private OCI registry.
-	// The secret must be of type kubernetes.io/dockerconfigjson.
+	// ChartPullSecret is the name of a Secret in the service provider's own
+	// namespace (the namespace the service-provider-argocd Pod runs in)
+	// containing credentials to pull the Helm chart from a private OCI
+	// registry. The secret must be of type kubernetes.io/dockerconfigjson.
+	// The controller copies it from there into the tenant namespace on the
+	// platform cluster (the same namespace as the ArgoCD OCIRepository,
+	// which references it via spec.secretRef), keeps it in sync, and removes
+	// it again once no longer referenced.
 	// +optional
 	ChartPullSecret string `json:"chartPullSecret,omitempty"`
 
