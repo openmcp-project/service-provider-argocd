@@ -140,9 +140,10 @@ type ArgoCDVersion struct {
 	// This field supports all configuration options from the ArgoCD Helm chart.
 	//
 	// Image pull secrets for ArgoCD components should be specified via
-	// values.imagePullSecrets. Any secrets referenced there will be copied from
-	// the service provider's namespace to the ArgoCD namespace on the
-	// ManagedControlPlane.
+	// values.global.imagePullSecrets[].name. Any secrets referenced there are
+	// expected to exist in the service provider's own namespace and are copied
+	// from there to the ArgoCD namespace on the ManagedControlPlane during
+	// provisioning; they are removed again when the ArgoCD resource is deleted.
 	// +optional
 	Values *apiextensionsv1.JSON `json:"values,omitempty"`
 }

@@ -31,6 +31,14 @@ tasks:
 
   test-e2e:
     desc: "Build image and run e2e tests"
+    vars:
+      # Go's test binary enforces a default 10m timeout (panicking with "test
+      # timed out") regardless of any -timeout set via `go test`'s caller.
+      # The e2e suite bootstraps a kind cluster, the openmcp-operator, Flux,
+      # and pulls real OCI Helm charts over the network, which can comfortably
+      # exceed that. Override on the CLI if you need even more headroom, e.g.:
+      #   task test-e2e E2E_TIMEOUT=60m
+      E2E_TIMEOUT: '{{.E2E_TIMEOUT | default "45m"}}'
     cmds:
       - task: build:img:build-test
-      - go test -v -timeout 45m ./test/e2e/... -count=1
+      - go test -v ./test/e2e/... -count=1 -timeout {{.E2E_TIMEOUT}}

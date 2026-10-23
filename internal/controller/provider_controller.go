@@ -28,6 +28,8 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
+	corev1 "k8s.io/api/core/v1"
+
 	"github.com/openmcp-project/controller-utils/pkg/clusters"
 	ctrlutils "github.com/openmcp-project/controller-utils/pkg/controller"
 	"github.com/openmcp-project/opencontrolplane-runtime/pkg/serviceprovider"
@@ -235,12 +237,38 @@ func (r *ArgoCDReconciler) newProvisioner(obj *apiv1alpha1.ArgoCD, pc *apiv1alph
 		TenantNamespace:         tenantNamespace,
 		MCPNamespace:            providerNamespace(obj),
 		KubeConfigSecretName:    clusterCtx.MCPAccessSecretKey.Name,
+		PodNamespace:            r.PodNamespace,
 		PollInterval:            pc.PollInterval(),
 		Exposure:                resolveExposure(obj, pc, clusterCtx.MCPCluster.APIServerEndpoint()),
 		Reloader:                resolveReloader(pc),
 		CABundleSecret:          pc.CABundleSecret(),
 		CABundleSourceNamespace: r.PodNamespace,
 	}), nil
+}
+
+// IsReferencedSecret implements serviceprovider.SecretWatcher. It reports
+// whether the given Secret (observed in PodNamespace on the platform cluster)
+// is referenced by any configured ArgoCD version's
+// values.global.imagePullSecrets, so that changes to it (e.g. credential
+// rotation) trigger reconciliation of all ArgoCD resources.
+func (r *ArgoCDReconciler) IsReferencedSecret(ctx context.Context, secret *corev1.Secret, pc *apiv1alpha1.ProviderConfig) bool {
+	if secret == nil || secret.Namespace != r.PodNamespace || pc == nil {
+		return false
+	}
+	log := logf.FromContext(ctx)
+	for _, version := range pc.Spec.Versions {
+		names, err := argocd.ImagePullSecretNames(version.Values)
+		if err != nil {
+			log.Error(err, "failed to extract image pull secret names from provider config version", "version", version.Version)
+			continue
+		}
+		for _, name := range names {
+			if name == secret.Name {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // providerNamespace resolves the target MCP namespace from the ArgoCD object,

@@ -109,6 +109,13 @@ spec:
         global:
           image:
             repository: quay.io/argoproj/argocd
+          # Secrets listed here must already exist in the service provider's own
+          # namespace (same namespace the service-provider-argocd Pod runs in,
+          # e.g. openmcp-system). The controller copies them from there into the
+          # ArgoCD namespace on each tenant's ManagedControlPlane, and keeps them
+          # in sync / removes them again on ArgoCD deletion.
+          imagePullSecrets:
+            - name: artifactory
 ```
 
 | Field                             | Type     | Description                                                              |
