@@ -88,7 +88,7 @@ func buildValues(base *apiextensionsv1.JSON, exposure ExposureValues, vaultPlugi
 // string, since the argocd-vault.yaml template renders with missingkey=error
 // and must always receive a usable repository.
 func globalImageRepository(values map[string]any) (string, error) {
-	var defaultGlobalImageRepository = "ghcr-remote.common.repositories.cloud.sap/argoproj/argo-helm/argo-cd"
+	var defaultGlobalImageRepository = "openmcp.common.repositories.cloud.sap/sovereigncloud-outbound/dev1/github.tools.sap/openmcp/releasechannel/argocd/images/argocd"
 
 	global, ok := values["global"].(map[string]any)
 	if !ok {

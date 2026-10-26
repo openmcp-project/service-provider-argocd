@@ -98,7 +98,7 @@ spec:
   # Enable or Disable Argo CD Vault Plugin
   vaultPlugin:
     enabled: false
-    registry: "ghcr-remote.common.repositories.cloud.sap/argocd-sidecar"
+    registry: "openmcp.common.repositories.cloud.sap/sovereigncloud-outbound/dev1/github.tools.sap/openmcp/releasechannel/argocd/images/argocd-sidecar"
     tag: "2.0.27"
   # Optional: install the Stakater Reloader addon alongside Argo CD so
   # argocd-server restarts when its managed TLS certificate rotates.
