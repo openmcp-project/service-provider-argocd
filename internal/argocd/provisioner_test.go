@@ -5,7 +5,10 @@ import (
 	"strings"
 	"testing"
 
+	sourcev1 "github.com/fluxcd/source-controller/api/v1"
+
 	corev1 "k8s.io/api/core/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -15,10 +18,267 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	sourcev1 "github.com/fluxcd/source-controller/api/v1"
-
 	apiv1alpha1 "github.com/openmcp-project/service-provider-argocd/api/v1alpha1"
 )
+
+func newTestScheme(t *testing.T) *runtime.Scheme {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	if err := clientgoscheme.AddToScheme(scheme); err != nil {
+		t.Fatalf("adding client-go scheme: %v", err)
+	}
+	return scheme
+}
+
+func newSecret(name, namespace string, data map[string][]byte) *corev1.Secret {
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+		Type:       corev1.SecretTypeDockerConfigJson,
+		Data:       data,
+	}
+}
+
+func TestProvisionerReconcileImagePullSecrets_CopiesAndPrunes(t *testing.T) {
+	scheme := newTestScheme(t)
+	ctx := context.Background()
+
+	podNamespace := "sp-argocd"
+	mcpNamespace := "argocd"
+
+	sourceSecret := newSecret("regcred", podNamespace, map[string][]byte{".dockerconfigjson": []byte(`{"auths":{}}`)})
+	// Pre-existing orphaned secret on the MCP that should be pruned away.
+	orphan := newSecret("stale", mcpNamespace, nil)
+	orphan.Labels = map[string]string{managedByLabel: imagePullSecretManagedByValue}
+	// A secret on the MCP that is not managed by us and must be left alone.
+	unmanaged := newSecret("unmanaged", mcpNamespace, nil)
+
+	platformClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(sourceSecret).Build()
+	mcpClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(orphan, unmanaged).Build()
+
+	p := &Provisioner{
+		platformClient: platformClient,
+		mcpClient:      mcpClient,
+		mcpNamespace:   mcpNamespace,
+		podNamespace:   podNamespace,
+	}
+
+	values := &apiextensionsv1.JSON{Raw: []byte(`{"global":{"imagePullSecrets":[{"name":"regcred"}]}}`)}
+	if err := p.reconcileImagePullSecrets(ctx, values); err != nil {
+		t.Fatalf("reconcileImagePullSecrets() error = %v", err)
+	}
+
+	// The referenced secret must now exist on the MCP, labeled as managed.
+	copied := &corev1.Secret{}
+	if err := mcpClient.Get(ctx, client.ObjectKey{Name: "regcred", Namespace: mcpNamespace}, copied); err != nil {
+		t.Fatalf("expected secret to be copied to MCP: %v", err)
+	}
+	if copied.Labels[managedByLabel] != imagePullSecretManagedByValue {
+		t.Fatalf("expected copied secret to carry managed-by label, got %v", copied.Labels)
+	}
+	if string(copied.Data[".dockerconfigjson"]) != `{"auths":{}}` {
+		t.Fatalf("expected copied secret data to match source, got %v", copied.Data)
+	}
+
+	// The orphaned, previously-managed secret must be pruned.
+	if err := mcpClient.Get(ctx, client.ObjectKey{Name: "stale", Namespace: mcpNamespace}, &corev1.Secret{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("expected orphaned managed secret to be deleted, got err=%v", err)
+	}
+
+	// The unmanaged secret must be untouched.
+	if err := mcpClient.Get(ctx, client.ObjectKey{Name: "unmanaged", Namespace: mcpNamespace}, &corev1.Secret{}); err != nil {
+		t.Fatalf("expected unmanaged secret to remain, got err=%v", err)
+	}
+}
+
+func TestProvisionerReconcileImagePullSecrets_MissingSourceSecretErrors(t *testing.T) {
+	scheme := newTestScheme(t)
+	ctx := context.Background()
+
+	platformClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	mcpClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+
+	p := &Provisioner{
+		platformClient: platformClient,
+		mcpClient:      mcpClient,
+		mcpNamespace:   "argocd",
+		podNamespace:   "sp-argocd",
+	}
+
+	values := &apiextensionsv1.JSON{Raw: []byte(`{"global":{"imagePullSecrets":[{"name":"missing"}]}}`)}
+	if err := p.reconcileImagePullSecrets(ctx, values); err == nil {
+		t.Fatal("expected error when source secret is missing, got nil")
+	}
+}
+
+func TestProvisionerRemoveImagePullSecrets_DeletesAllManaged(t *testing.T) {
+	scheme := newTestScheme(t)
+	ctx := context.Background()
+	mcpNamespace := "argocd"
+
+	managed1 := newSecret("regcred", mcpNamespace, nil)
+	managed1.Labels = map[string]string{managedByLabel: imagePullSecretManagedByValue}
+	managed2 := newSecret("other-cred", mcpNamespace, nil)
+	managed2.Labels = map[string]string{managedByLabel: imagePullSecretManagedByValue}
+	unmanaged := newSecret("unmanaged", mcpNamespace, nil)
+
+	mcpClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(managed1, managed2, unmanaged).Build()
+
+	p := &Provisioner{
+		mcpClient:    mcpClient,
+		mcpNamespace: mcpNamespace,
+	}
+
+	if err := p.removeImagePullSecrets(ctx); err != nil {
+		t.Fatalf("removeImagePullSecrets() error = %v", err)
+	}
+
+	for _, name := range []string{"regcred", "other-cred"} {
+		if err := mcpClient.Get(ctx, client.ObjectKey{Name: name, Namespace: mcpNamespace}, &corev1.Secret{}); !apierrors.IsNotFound(err) {
+			t.Fatalf("expected managed secret %q to be deleted, got err=%v", name, err)
+		}
+	}
+	if err := mcpClient.Get(ctx, client.ObjectKey{Name: "unmanaged", Namespace: mcpNamespace}, &corev1.Secret{}); err != nil {
+		t.Fatalf("expected unmanaged secret to remain, got err=%v", err)
+	}
+}
+
+// ── chart pull secrets (replicated to tenantNamespace, platform cluster) ──────
+
+func TestProvisionerReconcileChartPullSecrets_CopiesFromArgoCDVersionAndReloader(t *testing.T) {
+	scheme := newTestScheme(t)
+	ctx := context.Background()
+
+	podNamespace := "sp-argocd"
+	tenantNamespace := "tenant-ns"
+
+	argoCredSource := newSecret("argo-regcred", podNamespace, map[string][]byte{".dockerconfigjson": []byte(`{"auths":{"argo":{}}}`)})
+	reloaderCredSource := newSecret("reloader-regcred", podNamespace, map[string][]byte{".dockerconfigjson": []byte(`{"auths":{"reloader":{}}}`)})
+
+	platformClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(argoCredSource, reloaderCredSource).Build()
+
+	p := &Provisioner{
+		platformClient:  platformClient,
+		tenantNamespace: tenantNamespace,
+		podNamespace:    podNamespace,
+		reloader:        &apiv1alpha1.ReloaderConfig{ChartPullSecret: "reloader-regcred"},
+	}
+
+	version := apiv1alpha1.ArgoCDVersion{ChartPullSecret: "argo-regcred"}
+	if err := p.reconcileChartPullSecrets(ctx, version); err != nil {
+		t.Fatalf("reconcileChartPullSecrets() error = %v", err)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		source string
+	}{
+		{name: "argo-regcred", source: `{"auths":{"argo":{}}}`},
+		{name: "reloader-regcred", source: `{"auths":{"reloader":{}}}`},
+	} {
+		copied := &corev1.Secret{}
+		if err := platformClient.Get(ctx, client.ObjectKey{Name: tc.name, Namespace: tenantNamespace}, copied); err != nil {
+			t.Fatalf("expected secret %q to be copied to tenant namespace: %v", tc.name, err)
+		}
+		if copied.Labels[chartPullSecretLabel] != "true" {
+			t.Fatalf("expected copied secret %q to carry chart-pull-secret label, got %v", tc.name, copied.Labels)
+		}
+		if copied.Labels[managedByLabel] != managedByArgoCDValue {
+			t.Fatalf("expected copied secret %q to carry managed-by label, got %v", tc.name, copied.Labels)
+		}
+		if string(copied.Data[".dockerconfigjson"]) != tc.source {
+			t.Fatalf("copied secret %q data = %v, want %v", tc.name, copied.Data, tc.source)
+		}
+	}
+}
+
+func TestProvisionerReconcileChartPullSecrets_PrunesOrphanedAndLeavesUnmanaged(t *testing.T) {
+	scheme := newTestScheme(t)
+	ctx := context.Background()
+
+	podNamespace := "sp-argocd"
+	tenantNamespace := "tenant-ns"
+
+	source := newSecret("regcred", podNamespace, map[string][]byte{".dockerconfigjson": []byte(`{"auths":{}}`)})
+
+	// Previously-replicated secret for a chart pull secret that is no longer referenced.
+	orphan := newSecret("stale-regcred", tenantNamespace, nil)
+	orphan.Labels = map[string]string{managedByLabel: managedByArgoCDValue, chartPullSecretLabel: "true"}
+	// A same-named secret in the tenant namespace that we never replicated (no label) — must be left alone.
+	unmanaged := newSecret("hand-created", tenantNamespace, nil)
+
+	platformClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(source, orphan, unmanaged).Build()
+
+	p := &Provisioner{
+		platformClient:  platformClient,
+		tenantNamespace: tenantNamespace,
+		podNamespace:    podNamespace,
+	}
+
+	version := apiv1alpha1.ArgoCDVersion{ChartPullSecret: "regcred"}
+	if err := p.reconcileChartPullSecrets(ctx, version); err != nil {
+		t.Fatalf("reconcileChartPullSecrets() error = %v", err)
+	}
+
+	if err := platformClient.Get(ctx, client.ObjectKey{Name: "stale-regcred", Namespace: tenantNamespace}, &corev1.Secret{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("expected orphaned chart pull secret to be pruned, got err=%v", err)
+	}
+	if err := platformClient.Get(ctx, client.ObjectKey{Name: "hand-created", Namespace: tenantNamespace}, &corev1.Secret{}); err != nil {
+		t.Fatalf("expected unmanaged secret to remain, got err=%v", err)
+	}
+	if err := platformClient.Get(ctx, client.ObjectKey{Name: "regcred", Namespace: tenantNamespace}, &corev1.Secret{}); err != nil {
+		t.Fatalf("expected referenced secret to be copied, got err=%v", err)
+	}
+}
+
+func TestProvisionerReconcileChartPullSecrets_MissingSourceSecretErrors(t *testing.T) {
+	scheme := newTestScheme(t)
+	ctx := context.Background()
+
+	platformClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+
+	p := &Provisioner{
+		platformClient:  platformClient,
+		tenantNamespace: "tenant-ns",
+		podNamespace:    "sp-argocd",
+	}
+
+	version := apiv1alpha1.ArgoCDVersion{ChartPullSecret: "missing"}
+	if err := p.reconcileChartPullSecrets(ctx, version); err == nil {
+		t.Fatal("expected error when source chart pull secret is missing, got nil")
+	}
+}
+
+func TestProvisionerRemoveChartPullSecrets_DeletesAllManaged(t *testing.T) {
+	scheme := newTestScheme(t)
+	ctx := context.Background()
+	tenantNamespace := "tenant-ns"
+
+	managed1 := newSecret("argo-regcred", tenantNamespace, nil)
+	managed1.Labels = map[string]string{managedByLabel: managedByArgoCDValue, chartPullSecretLabel: "true"}
+	managed2 := newSecret("reloader-regcred", tenantNamespace, nil)
+	managed2.Labels = map[string]string{managedByLabel: managedByArgoCDValue, chartPullSecretLabel: "true"}
+	unmanaged := newSecret("hand-created", tenantNamespace, nil)
+
+	platformClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(managed1, managed2, unmanaged).Build()
+
+	p := &Provisioner{
+		platformClient:  platformClient,
+		tenantNamespace: tenantNamespace,
+	}
+
+	if err := p.removeChartPullSecrets(ctx); err != nil {
+		t.Fatalf("removeChartPullSecrets() error = %v", err)
+	}
+
+	for _, name := range []string{"argo-regcred", "reloader-regcred"} {
+		if err := platformClient.Get(ctx, client.ObjectKey{Name: name, Namespace: tenantNamespace}, &corev1.Secret{}); !apierrors.IsNotFound(err) {
+			t.Fatalf("expected managed chart pull secret %q to be deleted, got err=%v", name, err)
+		}
+	}
+	if err := platformClient.Get(ctx, client.ObjectKey{Name: "hand-created", Namespace: tenantNamespace}, &corev1.Secret{}); err != nil {
+		t.Fatalf("expected unmanaged secret to remain, got err=%v", err)
+	}
+}
 
 const (
 	testProviderNS = "provider-ns"

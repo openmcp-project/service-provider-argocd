@@ -12,6 +12,7 @@ import (
 	"github.com/fluxcd/pkg/runtime/conditions"
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	corev1 "k8s.io/api/core/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -40,6 +41,10 @@ type Provisioner struct {
 	mcpNamespace string
 	// kubeConfigSecretName references the MCP access secret in tenantNamespace.
 	kubeConfigSecretName string
+	// podNamespace is the namespace the service provider itself runs in, on the
+	// platform cluster. It is the source namespace for image pull secrets
+	// referenced via values.global.imagePullSecrets.
+	podNamespace string
 	// pollInterval controls how often Flux reconciles the resources.
 	pollInterval time.Duration
 	// exposure holds the resolved external-access intent for the ArgoCD server.
@@ -68,6 +73,7 @@ type ProvisionerConfig struct {
 	TenantNamespace         string
 	MCPNamespace            string
 	KubeConfigSecretName    string
+	PodNamespace            string
 	PollInterval            time.Duration
 	Exposure                ExposureValues
 	Reloader                *apiv1alpha1.ReloaderConfig
@@ -87,6 +93,7 @@ func NewProvisioner(cfg ProvisionerConfig) *Provisioner {
 		tenantNamespace:         cfg.TenantNamespace,
 		mcpNamespace:            cfg.MCPNamespace,
 		kubeConfigSecretName:    cfg.KubeConfigSecretName,
+		podNamespace:            cfg.PodNamespace,
 		pollInterval:            cfg.PollInterval,
 		exposure:                cfg.Exposure,
 		reloader:                cfg.Reloader,
@@ -102,12 +109,25 @@ func (p *Provisioner) Install(ctx context.Context, version apiv1alpha1.ArgoCDVer
 		return fmt.Errorf("version %q is missing a chart URL", version.Version)
 	}
 
+	if err := p.reconcileImagePullSecrets(ctx, version.Values); err != nil {
+		return fmt.Errorf("reconciling image pull secrets: %w", err)
+	}
+
+	// Chart pull secrets must exist in tenantNamespace *before* the
+	// OCIRepository resources (ArgoCD's and Reloader's) are applied below,
+	// since their spec.secretRef is a same-namespace LocalObjectReference.
+	if err := p.reconcileChartPullSecrets(ctx, version); err != nil {
+		return fmt.Errorf("reconciling chart pull secrets: %w", err)
+	}
+
 	if err := p.reconcileCABundle(ctx); err != nil {
 		return fmt.Errorf("reconciling CA bundle: %w", err)
 	}
+
 	if err := p.applyOCIRepository(ctx, version); err != nil {
 		return fmt.Errorf("reconciling OCIRepository: %w", err)
 	}
+
 	if err := p.applyHelmRelease(ctx, version); err != nil {
 		return fmt.Errorf("reconciling HelmRelease: %w", err)
 	}
@@ -188,6 +208,14 @@ func (p *Provisioner) Uninstall(ctx context.Context) error {
 	}
 	if err := p.platformClient.Delete(ctx, repo); client.IgnoreNotFound(err) != nil {
 		return fmt.Errorf("deleting OCIRepository: %w", err)
+	}
+
+	if err := p.removeImagePullSecrets(ctx); err != nil {
+		return fmt.Errorf("removing replicated image pull secrets: %w", err)
+	}
+
+	if err := p.removeChartPullSecrets(ctx); err != nil {
+		return fmt.Errorf("removing replicated chart pull secrets: %w", err)
 	}
 
 	return p.removeReloaderResources(ctx)
@@ -450,6 +478,211 @@ func (p *Provisioner) applyReloaderHelmRelease(ctx context.Context) error {
 		return nil
 	})
 	return err
+}
+
+// reconcileImagePullSecrets copies every Secret referenced via
+// values.global.imagePullSecrets from the service provider's own namespace
+// (podNamespace) into the ArgoCD namespace on the MCP, then removes any
+// previously-replicated secret that is no longer referenced.
+func (p *Provisioner) reconcileImagePullSecrets(ctx context.Context, values *apiextensionsv1.JSON) error {
+	names, err := ImagePullSecretNames(values)
+	logf.FromContext(ctx).V(1).Info("reconciling image pull secrets", "names", names)
+	if err != nil {
+		return err
+	}
+	for _, name := range names {
+		if err := p.copyImagePullSecret(ctx, name); err != nil {
+			return err
+		}
+	}
+	return p.pruneImagePullSecrets(ctx, names)
+}
+
+// copyImagePullSecret replicates a single Secret by name from podNamespace on
+// the platform cluster to mcpNamespace on the MCP. It is a create-or-update so
+// that upstream changes (e.g. credential rotation) are picked up on the next
+// reconciliation.
+//
+// Image pull secrets are reconciled before the HelmRelease/OCIRepository are
+// applied (see Install), which means on a brand-new MCP the target namespace
+// may not exist yet — Flux only creates it once the Helm install actually
+// runs. ensureMCPNamespace guards against that chicken-and-egg ordering so the
+// very first reconciliation does not fail permanently with "namespace not
+// found" before ArgoCD ever gets a chance to be installed.
+func (p *Provisioner) copyImagePullSecret(ctx context.Context, name string) error {
+	source := &corev1.Secret{}
+	if err := p.platformClient.Get(ctx, client.ObjectKey{Name: name, Namespace: p.podNamespace}, source); err != nil {
+		return fmt.Errorf("getting image pull secret %q from namespace %q: %w", name, p.podNamespace, err)
+	}
+
+	if err := p.ensureMCPNamespace(ctx); err != nil {
+		return fmt.Errorf("ensuring namespace %q exists on the MCP: %w", p.mcpNamespace, err)
+	}
+
+	target := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: p.mcpNamespace},
+	}
+	_, err := controllerutil.CreateOrUpdate(ctx, p.mcpClient, target, func() error {
+		setManagedByValue(target, imagePullSecretManagedByValue)
+		target.Type = source.Type
+		target.Data = source.Data
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("replicating image pull secret %q to namespace %q on the MCP: %w", name, p.mcpNamespace, err)
+	}
+	return nil
+}
+
+// ensureMCPNamespace creates mcpNamespace on the MCP if it does not already
+// exist. It is idempotent and safe to call on every reconciliation.
+func (p *Provisioner) ensureMCPNamespace(ctx context.Context) error {
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: p.mcpNamespace}}
+	if err := p.mcpClient.Create(ctx, ns); err != nil && !apierrors.IsAlreadyExists(err) {
+		return err
+	}
+	return nil
+}
+
+// pruneImagePullSecrets deletes replicated image pull Secrets in mcpNamespace
+// that are no longer referenced. Only Secrets stamped with
+// imagePullSecretManagedByValue are considered, so hand-created secrets are
+// never touched. Passing a nil/empty keep list removes all replicated secrets.
+func (p *Provisioner) pruneImagePullSecrets(ctx context.Context, keep []string) error {
+	keepSet := make(map[string]struct{}, len(keep))
+	for _, name := range keep {
+		keepSet[name] = struct{}{}
+	}
+
+	list := &corev1.SecretList{}
+	if err := p.mcpClient.List(ctx, list,
+		client.InNamespace(p.mcpNamespace),
+		client.MatchingLabels{managedByLabel: imagePullSecretManagedByValue},
+	); err != nil {
+		return fmt.Errorf("listing replicated image pull secrets in namespace %q: %w", p.mcpNamespace, err)
+	}
+
+	for i := range list.Items {
+		if _, ok := keepSet[list.Items[i].Name]; ok {
+			continue
+		}
+		if err := p.mcpClient.Delete(ctx, &list.Items[i]); client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("deleting orphaned image pull secret %q: %w", list.Items[i].Name, err)
+		}
+	}
+	return nil
+}
+
+// removeImagePullSecrets deletes all replicated image pull secrets from the
+// MCP's ArgoCD namespace. It is called on Uninstall.
+func (p *Provisioner) removeImagePullSecrets(ctx context.Context) error {
+	return p.pruneImagePullSecrets(ctx, nil)
+}
+
+// reconcileChartPullSecrets copies the chart pull secrets referenced by the
+// ArgoCD version (version.ChartPullSecret) and, when configured, the Reloader
+// addon (p.reloader.ChartPullSecret) from the service provider's own
+// namespace (podNamespace) into tenantNamespace on the platform cluster. That
+// is where the matching Flux OCIRepository lives, and its spec.secretRef is a
+// same-namespace LocalObjectReference, so the secret must be present there —
+// unlike image pull secrets, which are replicated onto the MCP instead.
+// Any previously-replicated chart pull secret no longer referenced is pruned.
+func (p *Provisioner) reconcileChartPullSecrets(ctx context.Context, version apiv1alpha1.ArgoCDVersion) error {
+	names := chartPullSecretNames(version, p.reloader)
+	for _, name := range names {
+		if err := p.copyChartPullSecret(ctx, name); err != nil {
+			return err
+		}
+	}
+	return p.pruneChartPullSecrets(ctx, names)
+}
+
+// chartPullSecretNames collects the distinct, non-empty chart pull secret
+// names referenced by the ArgoCD version and, when configured, the Reloader
+// addon.
+func chartPullSecretNames(version apiv1alpha1.ArgoCDVersion, reloader *apiv1alpha1.ReloaderConfig) []string {
+	seen := make(map[string]struct{}, 2)
+	var names []string
+	add := func(name string) {
+		if name == "" {
+			return
+		}
+		if _, ok := seen[name]; ok {
+			return
+		}
+		seen[name] = struct{}{}
+		names = append(names, name)
+	}
+	add(version.ChartPullSecret)
+	if reloader != nil {
+		add(reloader.ChartPullSecret)
+	}
+	return names
+}
+
+// copyChartPullSecret replicates a single Secret by name from podNamespace on
+// the platform cluster into tenantNamespace, also on the platform cluster. It
+// is a create-or-update so that upstream changes (e.g. credential rotation)
+// are picked up on the next reconciliation.
+func (p *Provisioner) copyChartPullSecret(ctx context.Context, name string) error {
+	source := &corev1.Secret{}
+	if err := p.platformClient.Get(ctx, client.ObjectKey{Name: name, Namespace: p.podNamespace}, source); err != nil {
+		return fmt.Errorf("getting chart pull secret %q from namespace %q: %w", name, p.podNamespace, err)
+	}
+
+	target := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: p.tenantNamespace},
+	}
+	_, err := controllerutil.CreateOrUpdate(ctx, p.platformClient, target, func() error {
+		setManagedByValue(target, managedByArgoCDValue)
+		if target.Labels == nil {
+			target.Labels = map[string]string{}
+		}
+		target.Labels[chartPullSecretLabel] = "true"
+		target.Type = source.Type
+		target.Data = source.Data
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("replicating chart pull secret %q to tenant namespace %q: %w", name, p.tenantNamespace, err)
+	}
+	return nil
+}
+
+// pruneChartPullSecrets deletes replicated chart pull Secrets in
+// tenantNamespace that are no longer referenced. Only Secrets stamped with
+// chartPullSecretLabel are considered, so hand-created secrets of the same
+// name are never touched. Passing a nil/empty keep list removes all
+// replicated chart pull secrets.
+func (p *Provisioner) pruneChartPullSecrets(ctx context.Context, keep []string) error {
+	keepSet := make(map[string]struct{}, len(keep))
+	for _, name := range keep {
+		keepSet[name] = struct{}{}
+	}
+
+	list := &corev1.SecretList{}
+	if err := p.platformClient.List(ctx, list,
+		client.InNamespace(p.tenantNamespace),
+		client.MatchingLabels{chartPullSecretLabel: "true"},
+	); err != nil {
+		return fmt.Errorf("listing replicated chart pull secrets in namespace %q: %w", p.tenantNamespace, err)
+	}
+
+	for i := range list.Items {
+		if _, ok := keepSet[list.Items[i].Name]; ok {
+			continue
+		}
+		if err := p.platformClient.Delete(ctx, &list.Items[i]); client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("deleting orphaned chart pull secret %q: %w", list.Items[i].Name, err)
+		}
+	}
+	return nil
+}
+
+// removeChartPullSecrets deletes all replicated chart pull secrets from the
+// tenant namespace. It is called on Uninstall.
+func (p *Provisioner) removeChartPullSecrets(ctx context.Context) error {
+	return p.pruneChartPullSecrets(ctx, nil)
 }
 
 // setManagedByValue sets the managed-by label on obj to the given value,

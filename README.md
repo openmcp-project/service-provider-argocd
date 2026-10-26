@@ -103,12 +103,19 @@ spec:
       # Optional: OCI registry URL of the Argo CD Helm chart.
       chartUrl: "oci://ghcr.io/argoproj/argo-helm/argo-cd"
       # Optional: Secret for a private chart registry (must exist in the controller namespace).
-      chartPullSecret: privateregcred
+      chartPullSecret: artifactory
       # Optional: custom Helm values passed to the managed HelmRelease.
       values:
         global:
           image:
             repository: quay.io/argoproj/argocd
+          # Secrets listed here must already exist in the service provider's own
+          # namespace (same namespace the service-provider-argocd Pod runs in,
+          # e.g. openmcp-system). The controller copies them from there into the
+          # ArgoCD namespace on each tenant's ManagedControlPlane, and keeps them
+          # in sync / removes them again on ArgoCD deletion.
+          imagePullSecrets:
+            - name: artifactory
 ```
 
 | Field                             | Type     | Description                                                              |
