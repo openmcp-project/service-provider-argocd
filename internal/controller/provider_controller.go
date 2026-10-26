@@ -365,7 +365,10 @@ func resolveVaultPlugin(obj *apiv1alpha1.ArgoCD, pc *apiv1alpha1.ProviderConfig)
 	if !pc.VaultPluginEnabled() {
 		return false
 	}
-	return obj.Spec.VaultPlugin.Enabled && pc.Spec.VaultPlugin.Enabled
+	if obj.Spec.VaultPlugin == nil {
+		return false
+	}
+	return obj.Spec.VaultPlugin.Enabled
 }
 
 // warnIfExposureWithoutReloader logs when a tenant requests exposure but the

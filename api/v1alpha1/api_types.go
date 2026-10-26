@@ -46,8 +46,10 @@ type ArgoCDSpec struct {
 	// +optional
 	Exposure *ServerExposure `json:"exposure,omitempty"`
 
-	// VaultPlugin optionally overrides the platform-level VaultPlugin setting
-	// for this ArgoCD instance. When nil, the ProviderConfig setting is used.
+	// VaultPlugin optionally enables the ArgoCD Vault Plugin (AVP) for this
+	// ArgoCD instance. It takes effect only when the platform also enables it
+	// in the ProviderConfig (the platform setting gates this one). When nil,
+	// AVP is not enabled for this instance.
 	// +optional
 	VaultPlugin *VaultPluginConfig `json:"vaultPlugin,omitempty"`
 }
@@ -70,6 +72,19 @@ type ServerExposure struct {
 	// CIDR ranges. When empty, the LoadBalancer accepts traffic from any source.
 	// +optional
 	AllowedIPs []string `json:"allowedIPs,omitempty"`
+}
+
+// VaultPluginConfig opts an individual ArgoCD instance into the ArgoCD Vault
+// Plugin (AVP) addon. It only takes effect when the platform also enables AVP
+// in the ProviderConfig, which gates this setting; the image coordinates are
+// always taken from the ProviderConfig.
+type VaultPluginConfig struct {
+	// Enabled requests that AVP sidecars be injected into the ArgoCD
+	// repo-server for this instance. It is honoured only when the platform
+	// enables AVP in the ProviderConfig; setting it to false (or omitting the
+	// VaultPlugin field entirely) leaves ArgoCD untouched.
+	// +required
+	Enabled bool `json:"enabled"`
 }
 
 // ArgoCDStatus defines the observed state of ArgoCD.

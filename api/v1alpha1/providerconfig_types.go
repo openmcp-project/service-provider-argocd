@@ -64,15 +64,6 @@ type ProviderConfigSpec struct {
 	VaultPlugin *ProviderVaultPluginConfig `json:"vaultPlugin,omitempty"`
 }
 
-// VaultPluginConfig enables and configures the ArgoCD Vault Plugin (AVP) addon.
-type VaultPluginConfig struct {
-	// Enabled controls whether AVP sidecars are injected into the ArgoCD
-	// repo-server. Setting this to false (or omitting the VaultPlugin field
-	// entirely) leaves ArgoCD untouched.
-	// +required
-	Enabled bool `json:"enabled"`
-}
-
 // ProviderVaultPluginConfig enables and configures the ArgoCD Vault Plugin
 // (AVP) addon at the platform level, including the sidecar image coordinates.
 type ProviderVaultPluginConfig struct {
