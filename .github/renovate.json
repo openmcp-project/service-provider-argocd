@@ -8,10 +8,10 @@
   ],
   "packageRules": [
     {
-      "matchPackagePatterns": [
-        "^ghcr\\.io/openmcp-project/images/"
-      ],
-      "pinDigests": false
+      "pinDigests": false,
+      "matchPackageNames": [
+        "/^ghcr\\.io/openmcp-project/images//"
+      ]
     }
   ],
   "customManagers": [
