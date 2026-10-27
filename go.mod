@@ -7,6 +7,7 @@ require (
 	github.com/fluxcd/pkg/apis/meta v1.36.0
 	github.com/fluxcd/pkg/runtime v0.120.0
 	github.com/fluxcd/source-controller/api v1.9.6
+	github.com/go-logr/logr v1.4.4
 	github.com/openmcp-project/controller-utils v0.33.3
 	github.com/openmcp-project/opencontrolplane-runtime v1.4.2
 	github.com/openmcp-project/openmcp-operator/api v1.4.2
@@ -46,7 +47,6 @@ require (
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.3 // indirect
 	github.com/go-errors/errors v1.5.1 // indirect
-	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-logr/zapr v1.3.0 // indirect
 	github.com/go-openapi/jsonpointer v1.0.0 // indirect
