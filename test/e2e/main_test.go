@@ -45,7 +45,7 @@ func TestMain(m *testing.M) {
 			{
 				Name: "kind",
 				// renovate: datasource=docker depName=ghcr.io/openmcp-project/images/cluster-provider-kind
-				Image:    "ghcr.io/openmcp-project/images/cluster-provider-kind:v0.7.2",
+				Image:    "ghcr.io/openmcp-project/images/cluster-provider-kind:v0.7.4",
 				WaitOpts: []wait.Option{wait.WithTimeout(15 * time.Minute)},
 			},
 		},
