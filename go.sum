@@ -37,8 +37,8 @@ github.com/felixge/httpsnoop v1.0.4 h1:NFTV2Zj1bL4mc9sqWACXbQFVBBg2W3GPvqp8/ESS2
 github.com/felixge/httpsnoop v1.0.4/go.mod h1:m8KPJKqk1gH5J9DgRY2ASl2lWCfGKXixSwevea8zH2U=
 github.com/fluxcd/flux2/v2 v2.9.6 h1:YuJCLztSqTJ+b39OZ2JYtOnc3R6dPn63ElhXX8NM524=
 github.com/fluxcd/flux2/v2 v2.9.6/go.mod h1:d00dggKAlNZv9RgdPLVX5i2l01bxcjHStGKFwngOq6Y=
-github.com/fluxcd/helm-controller/api v1.6.5 h1:ElqM5KIpdUwVK1VSi1fXcMwOlf0LghuqwM2SwqaTyNs=
-github.com/fluxcd/helm-controller/api v1.6.5/go.mod h1:mYa4WKwgCCE59dMdYzOJI6B17/wofN6wtmtjWWEQesQ=
+github.com/fluxcd/helm-controller/api v1.7.1 h1:kARTcSBiS05mQsY7nVdL+XGaIGPZd/oC5owFTN6NIyk=
+github.com/fluxcd/helm-controller/api v1.7.1/go.mod h1:cCTRZcz/hjvI+3AxRGgsGe/AeEjZHHKUYxV/+6uidNM=
 github.com/fluxcd/kustomize-controller/api v1.9.6 h1:7XiuW+l3YYXWeIwLJ8w34zHlJyMUEKosBIxLIki9J3I=
 github.com/fluxcd/kustomize-controller/api v1.9.6/go.mod h1:oRSEvNgNs07P6Tu3xtRigWxnxLkUCqatxbDv+gG3tLI=
 github.com/fluxcd/pkg/apis/acl v0.12.0 h1:UWpZDqKxpKDW38wdXIMHV8Uv3POPu2vUrra0JH1frH0=
@@ -53,8 +53,8 @@ github.com/fluxcd/pkg/runtime v0.122.0 h1:5nT+3PqbRvnzIMBNW6g/lIqsg6B715zaF12J3K
 github.com/fluxcd/pkg/runtime v0.122.0/go.mod h1:46y8/GVMFotQkQxzzePecv7cn09DLbQhq6cl2VQ5l9A=
 github.com/fluxcd/pkg/tar v1.2.0 h1:T6WFB5M0YRHktlrgdKNskqpdp76TVDdWTOeuWz33CFs=
 github.com/fluxcd/pkg/tar v1.2.0/go.mod h1:Wlalp5vIVe+BbckkKkqExKcoHAeeWJPAzwK7ONeFcS0=
-github.com/fluxcd/source-controller/api v1.9.6 h1:h9+CsJVw4CNbMEsnEb11SGEhLfKzVTkWC0w7M8VX4Hk=
-github.com/fluxcd/source-controller/api v1.9.6/go.mod h1:Y5mcHYzML/mJYjvSJRcIo7eLLjd+cZjnKR6WeIGrouE=
+github.com/fluxcd/source-controller/api v1.10.0 h1:th1PYE0f27GWumb/7HoLB9g2zR6YpJue5+I66IuQCww=
+github.com/fluxcd/source-controller/api v1.10.0/go.mod h1:ar4cOwOZ9aMei+7eChKuJFJmnN1Mm5LOTZ9q46Yp4c0=
 github.com/fsnotify/fsnotify v1.10.1 h1:b0/UzAf9yR5rhf3RPm9gf3ehBPpf0oZKIjtpKrx59Ho=
 github.com/fsnotify/fsnotify v1.10.1/go.mod h1:TLheqan6HD6GBK6PrDWyDPBaEV8LspOxvPSjC+bVfgo=
 github.com/fxamacker/cbor/v2 v2.9.3 h1:oQBnFATpNdY8gJHTndDDv5Xl4QqNaz51G5LLEPhng3Q=
