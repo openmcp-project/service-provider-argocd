@@ -41,6 +41,15 @@ spec:
           spec:
             description: spec defines the desired state of ProviderConfig
             properties:
+              caBundleSecret:
+                description: |-
+                  CABundleSecret optionally names a Secret in the service provider's
+                  namespace containing a PEM-encoded CA bundle under the key "ca.crt".
+                  When set, the bundle is propagated to all Flux OCIRepository resources
+                  (so that chart pulls from private registries succeed) and injected into
+                  ArgoCD's trusted-certificate configuration so that ArgoCD can reach Git
+                  hosts and other services that use a private certificate authority.
+                type: string
               exposure:
                 description: |-
                   Exposure defines platform-level policy applied when a tenant requests
@@ -63,6 +72,16 @@ spec:
                     description: DNSTTL is the TTL, in seconds, for managed DNS records.
                     type: integer
                 type: object
+              openSource:
+                description: |-
+                  OpenSource selects which flavour of the ArgoCD Vault Plugin configuration
+                  to apply. When true, the open-source AVP configuration bundle is used
+                  (the plugin binaries are fetched from public sources and no custom image
+                  registry/tag is required). When false (the default), the internal AVP
+                  configuration bundle is used, which pulls the plugin from an internal
+                  image registry and therefore requires spec.vaultPlugin.registry and
+                  spec.vaultPlugin.tag when AVP is enabled.
+                type: boolean
               pollInterval:
                 default: 1m
                 description: PollInterval determines how often to reconcile resources
@@ -81,9 +100,13 @@ spec:
                 properties:
                   chartPullSecret:
                     description: |-
-                      ChartPullSecret is the name of a Secret in the service provider's
-                      namespace containing credentials to pull the chart from a private OCI
-                      registry.
+                      ChartPullSecret is the name of a Secret in the service provider's own
+                      namespace (the namespace the service-provider-argocd Pod runs in)
+                      containing credentials to pull the chart from a private OCI registry.
+                      The controller copies it from there into the tenant namespace on the
+                      platform cluster (the same namespace as the Reloader OCIRepository,
+                      which references it via spec.secretRef), keeps it in sync, and removes
+                      it again once no longer referenced.
                     type: string
                   chartUrl:
                     default: oci://ghcr.io/stakater/charts/reloader
@@ -125,18 +148,20 @@ spec:
                     description: |-
                       Registry is the container image registry (repository) for the ArgoCD
                       Vault Plugin sidecar image. It is combined with Tag to form the image
-                      reference used by the AVP initContainer and sidecar containers.
+                      reference used by the AVP initContainer and sidecar containers. It is
+                      required for internal installations (spec.openSource=false) when AVP is
+                      enabled, and ignored for open-source installations.
                     type: string
                   tag:
                     description: |-
                       Tag is the image tag for the ArgoCD Vault Plugin sidecar image. It is
                       combined with Registry to form the image reference used by the AVP
-                      initContainer and sidecar containers.
+                      initContainer and sidecar containers. It is required for internal
+                      installations (spec.openSource=false) when AVP is enabled, and ignored
+                      for open-source installations.
                     type: string
                 required:
                 - enabled
-                - registry
-                - tag
                 type: object
               versions:
                 description: |-
@@ -149,9 +174,14 @@ spec:
                   properties:
                     chartPullSecret:
                       description: |-
-                        ChartPullSecret is the name of a Secret in the service provider's namespace
-                        containing credentials to pull the Helm chart from a private OCI registry.
-                        The secret must be of type kubernetes.io/dockerconfigjson.
+                        ChartPullSecret is the name of a Secret in the service provider's own
+                        namespace (the namespace the service-provider-argocd Pod runs in)
+                        containing credentials to pull the Helm chart from a private OCI
+                        registry. The secret must be of type kubernetes.io/dockerconfigjson.
+                        The controller copies it from there into the tenant namespace on the
+                        platform cluster (the same namespace as the ArgoCD OCIRepository,
+                        which references it via spec.secretRef), keeps it in sync, and removes
+                        it again once no longer referenced.
                       type: string
                     chartUrl:
                       default: oci://ghcr.io/argoproj/argo-helm/argo-cd
@@ -168,9 +198,10 @@ spec:
                         This field supports all configuration options from the ArgoCD Helm chart.
 
                         Image pull secrets for ArgoCD components should be specified via
-                        values.imagePullSecrets. Any secrets referenced there will be copied from
-                        the service provider's namespace to the ArgoCD namespace on the
-                        ManagedControlPlane.
+                        values.global.imagePullSecrets[].name. Any secrets referenced there are
+                        expected to exist in the service provider's own namespace and are copied
+                        from there to the ArgoCD namespace on the ManagedControlPlane during
+                        provisioning; they are removed again when the ArgoCD resource is deleted.
                       x-kubernetes-preserve-unknown-fields: true
                     version:
                       description: |-
@@ -186,6 +217,12 @@ spec:
             required:
             - versions
             type: object
+            x-kubernetes-validations:
+            - message: spec.vaultPlugin.registry and spec.vaultPlugin.tag are required
+                when spec.vaultPlugin.enabled is true and spec.openSource is false
+              rule: self.openSource || !has(self.vaultPlugin) || !self.vaultPlugin.enabled
+                || (has(self.vaultPlugin.registry) && size(self.vaultPlugin.registry)
+                > 0 && has(self.vaultPlugin.tag) && size(self.vaultPlugin.tag) > 0)
           status:
             description: status defines the observed state of ProviderConfig
             properties:

@@ -2,9 +2,12 @@ package argocd
 
 import (
 	"bytes"
+	"crypto/x509"
 	_ "embed"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"text/template"
@@ -13,8 +16,11 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-//go:embed configurations/argocd-vault.yaml
-var argocdVaultYAML []byte
+//go:embed configurations/open-source/argocd-vault.yaml
+var argocdVaultOpenSourceYAML []byte
+
+//go:embed configurations/internal/argocd-vault.yaml
+var argocdVaultInternalYAML []byte
 
 // ExposureValues carries the fully-resolved exposure intent, combining the
 // tenant's request (host, allowed IPs) with the platform policy (DNS class,
@@ -37,17 +43,54 @@ type vaultPluginValues struct {
 	registry  string
 	tag       string
 	namespace string
+	// openSource selects which bundled AVP configuration to apply: the
+	// open-source bundle when true, the internal bundle when false.
+	openSource bool
+}
+
+// imagePullSecretsValues mirrors the subset of Helm values this provider reads
+// in order to discover image pull secrets that must be replicated from the
+// service provider's namespace onto the ArgoCD namespace on the MCP, as
+// documented on ArgoCDVersion.Values.
+type imagePullSecretsValues struct {
+	Global struct {
+		ImagePullSecrets []struct {
+			Name string `json:"name"`
+		} `json:"imagePullSecrets,omitempty"`
+	} `json:"global,omitempty"`
+}
+
+// ImagePullSecretNames extracts the names listed under
+// values.global.imagePullSecrets[].name from the operator-supplied Helm
+// values. It returns an empty slice when values is nil/empty or the path is
+// not set.
+func ImagePullSecretNames(values *apiextensionsv1.JSON) ([]string, error) {
+	if values == nil || len(values.Raw) == 0 {
+		return nil, nil
+	}
+	var parsed imagePullSecretsValues
+	if err := json.Unmarshal(values.Raw, &parsed); err != nil {
+		return nil, fmt.Errorf("decoding values to extract global.imagePullSecrets: %w", err)
+	}
+	names := make([]string, 0, len(parsed.Global.ImagePullSecrets))
+	for _, ref := range parsed.Global.ImagePullSecrets {
+		if ref.Name != "" {
+			names = append(names, ref.Name)
+		}
+	}
+	return names, nil
 }
 
 // buildValues merges the operator-supplied chart values with the exposure
-// fragment derived from the ArgoCD request. Precedence is:
+// fragment derived from the ArgoCD request and, when a custom CA is provided,
+// injects it into ArgoCD's trusted-certificate configuration. Precedence is:
 //
-//	chart defaults  <  operator values (version.Values)  <  vault plugin fragment  <  exposure fragment
+//	chart defaults  <  operator values (version.Values)  <  vault plugin fragment  <  exposure fragment  <  CA fragment
 //
 // so that platform-provided values cannot silently drop the annotations that
 // exposure depends on. A nil result means "no values", which is a valid input
 // for a HelmRelease.
-func buildValues(base *apiextensionsv1.JSON, exposure ExposureValues, vaultPlugin vaultPluginValues, version string) (*apiextensionsv1.JSON, error) {
+func buildValues(base *apiextensionsv1.JSON, exposure ExposureValues, caCert string, vaultPlugin vaultPluginValues, version string) (*apiextensionsv1.JSON, error) {
 	values := map[string]any{}
 	if base != nil && len(base.Raw) > 0 {
 		if err := json.Unmarshal(base.Raw, &values); err != nil {
@@ -55,20 +98,8 @@ func buildValues(base *apiextensionsv1.JSON, exposure ExposureValues, vaultPlugi
 		}
 	}
 
-	if vaultPlugin.enabled {
-		repository, err := globalImageRepository(values)
-		if err != nil {
-			return nil, fmt.Errorf("loading vault plugin values: %w", err)
-		}
-		vaultFragment, err := vaultPluginFragment(version, repository, vaultPlugin.registry, vaultPlugin.tag, vaultPlugin.namespace)
-		if err != nil {
-			return nil, fmt.Errorf("loading vault plugin values: %w", err)
-		}
-		deepMerge(values, vaultFragment)
-	}
-
-	if exposure.Enabled {
-		deepMerge(values, exposureFragment(exposure))
+	if err := mergeFragments(values, exposure, caCert, vaultPlugin, version); err != nil {
+		return nil, err
 	}
 
 	if len(values) == 0 {
@@ -82,25 +113,63 @@ func buildValues(base *apiextensionsv1.JSON, exposure ExposureValues, vaultPlugi
 	return &apiextensionsv1.JSON{Raw: raw}, nil
 }
 
-// globalImageRepository extracts global.image.repository from the
-// operator-supplied values map, falling back to the chart default when the key
-// is unset. It returns an error if the key is present but not a non-empty
-// string, since the argocd-vault.yaml template renders with missingkey=error
-// and must always receive a usable repository.
-func globalImageRepository(values map[string]any) (string, error) {
-	var defaultGlobalImageRepository = "openmcp.common.repositories.cloud.sap/sovereigncloud-outbound/dev1/github.tools.sap/openmcp/releasechannel/argocd/images/argocd"
+// mergeFragments layers the vault plugin, exposure, and CA fragments onto
+// values in precedence order. It is factored out of buildValues to keep that
+// function's cyclomatic complexity low.
+func mergeFragments(values map[string]any, exposure ExposureValues, caCert string, vaultPlugin vaultPluginValues, version string) error {
+	if vaultPlugin.enabled {
+		if err := mergeVaultPlugin(values, vaultPlugin, version); err != nil {
+			return err
+		}
+	}
 
+	if exposure.Enabled {
+		deepMerge(values, exposureFragment(exposure))
+	}
+
+	if caCert != "" {
+		fragment, err := caBundleFragment(caCert)
+		if err != nil {
+			return fmt.Errorf("building CA bundle values: %w", err)
+		}
+		deepMerge(values, fragment)
+	}
+
+	return nil
+}
+
+// mergeVaultPlugin resolves the ArgoCD Vault Plugin fragment and deep-merges it
+// into values. It is factored out of buildValues to keep that function's
+// control flow flat.
+func mergeVaultPlugin(values map[string]any, vaultPlugin vaultPluginValues, version string) error {
+	repository, err := globalImageRepository(values)
+	if err != nil {
+		return fmt.Errorf("loading vault plugin values: %w", err)
+	}
+	vaultFragment, err := vaultPluginFragment(vaultPlugin, repository, version)
+	if err != nil {
+		return fmt.Errorf("loading vault plugin values: %w", err)
+	}
+	deepMerge(values, vaultFragment)
+	return nil
+}
+
+// globalImageRepository extracts global.image.repository from the
+// operator-supplied values map. It returns an error if the key is unset or is
+// present but not a non-empty string, since the argocd-vault.yaml template
+// renders with missingkey=error and must always receive a usable repository.
+func globalImageRepository(values map[string]any) (string, error) {
 	global, ok := values["global"].(map[string]any)
 	if !ok {
-		return defaultGlobalImageRepository, nil
+		return "", fmt.Errorf("global.image.repository is required but global is unset")
 	}
 	image, ok := global["image"].(map[string]any)
 	if !ok {
-		return defaultGlobalImageRepository, nil
+		return "", fmt.Errorf("global.image.repository is required but global.image is unset")
 	}
 	raw, ok := image["repository"]
 	if !ok {
-		return defaultGlobalImageRepository, nil
+		return "", fmt.Errorf("global.image.repository is required but is unset")
 	}
 	repository, ok := raw.(string)
 	if !ok || repository == "" {
@@ -111,19 +180,26 @@ func globalImageRepository(values map[string]any) (string, error) {
 
 // vaultPluginFragment parses the bundled argocd-vault.yaml and returns it as
 // an untyped map suitable for deep-merging into the HelmRelease values.
-// The YAML is first rendered as a Go template using the requested ArgoCD version so that {{ .Values.global.image.repository }}
+// The open-source bundle is used when vaultPlugin.openSource is true, otherwise
+// the internal bundle is used. The YAML is first rendered as a Go template
+// using the requested ArgoCD version so that {{ .Values.global.image.repository }}
 // and {{ .Values.global.image.tag }} references are resolved before parsing.
-// The AVP initContainer container has its image set to registry:tag so
-// that the plugin binary comes from the operator-configured image.
-func vaultPluginFragment(version, repository, registry, tag, namespace string) (map[string]any, error) {
-	tmpl, err := template.New("argocd-vault").Option("missingkey=error").Parse(string(argocdVaultYAML))
+// The ProviderConfig-supplied AVP image coordinates are exposed as
+// {{ .VaultPlugin.Registry }} and {{ .VaultPlugin.Tag }} so the internal
+// bundle can pin the avp-binary initContainer image.
+func vaultPluginFragment(vaultPlugin vaultPluginValues, repository, version string) (map[string]any, error) {
+	source := argocdVaultInternalYAML
+	if vaultPlugin.openSource {
+		source = argocdVaultOpenSourceYAML
+	}
+	tmpl, err := template.New("argocd-vault").Option("missingkey=error").Parse(string(source))
 	if err != nil {
 		return nil, fmt.Errorf("parsing argocd-vault.yaml template: %w", err)
 	}
 
 	data := map[string]any{
 		"Release": map[string]any{
-			"Namespace": namespace,
+			"Namespace": vaultPlugin.namespace,
 		},
 		"Values": map[string]any{
 			"global": map[string]any{
@@ -132,6 +208,10 @@ func vaultPluginFragment(version, repository, registry, tag, namespace string) (
 					"tag":        version,
 				},
 			},
+		},
+		"VaultPlugin": map[string]any{
+			"Registry": vaultPlugin.registry,
+			"Tag":      vaultPlugin.tag,
 		},
 	}
 	var buf bytes.Buffer
@@ -146,15 +226,6 @@ func vaultPluginFragment(version, repository, registry, tag, namespace string) (
 	var fragment map[string]any
 	if err := json.Unmarshal(jsonBytes, &fragment); err != nil {
 		return nil, fmt.Errorf("decoding argocd-vault.yaml: %w", err)
-	}
-	avpImage := registry + ":" + tag
-	repoServer, _ := fragment["repoServer"].(map[string]any)
-	initContainers, _ := repoServer["initContainers"].([]any)
-	for _, c := range initContainers {
-		container, _ := c.(map[string]any)
-		if container["name"] == "avp-binary" {
-			container["image"] = avpImage
-		}
 	}
 	return fragment, nil
 }
@@ -229,4 +300,113 @@ func deepMerge(dst, src map[string]any) {
 		}
 		dst[key] = srcVal
 	}
+}
+
+// caBundleFragment renders the ArgoCD Helm values that inject the custom CA
+// bundle into ArgoCD's trusted-certificate configuration. This populates the
+// argocd-tls-certs-cm ConfigMap that ArgoCD's repo-server reads when connecting
+// to Git repositories and other TLS endpoints.
+//
+// ArgoCD keys that ConfigMap by the server hostname: when it connects to
+// https://<host>, it trusts the certificate stored under the key <host>. The
+// hostnames are therefore extracted from the provided certificate's DNS SANs
+// (or, when it carries none, its Common Name). The convention is that the
+// platform team embeds the target Git/registry hostnames as SANs on the CA
+// bundle so the trust anchor is wired to exactly those endpoints.
+func caBundleFragment(caCert string) (map[string]any, error) {
+	hosts, err := certHostnames(caCert)
+	if err != nil {
+		return nil, err
+	}
+
+	certificates := make(map[string]any, len(hosts))
+	for _, host := range hosts {
+		certificates[host] = caCert
+	}
+
+	return map[string]any{
+		"configs": map[string]any{
+			"tls": map[string]any{
+				"certificates": certificates,
+			},
+		},
+	}, nil
+}
+
+// hostKeyPattern matches a hostname that is also a valid ConfigMap data key
+// (RFC 1123 labels joined by dots). Wildcards and other characters that ArgoCD
+// could never match against a concrete connection host are rejected.
+var hostKeyPattern = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*$`)
+
+// isValidHostKey reports whether host can be used as an argocd-tls-certs-cm key.
+func isValidHostKey(host string) bool {
+	if host == "" || len(host) > 253 {
+		return false
+	}
+	return hostKeyPattern.MatchString(host)
+}
+
+// certHostnames parses one or more PEM-encoded certificates and returns the
+// hostnames to key the trusted-certificate ConfigMap by. DNS SANs across all
+// certificates in the bundle are preferred; when none are present it falls back
+// to the first certificate's Common Name. It returns an error when the input
+// cannot be parsed or yields no usable hostname.
+func certHostnames(caCert string) ([]string, error) {
+	certs, err := parseCertificates(caCert)
+	if err != nil {
+		return nil, err
+	}
+
+	hosts := collectDNSHosts(certs)
+	if len(hosts) == 0 {
+		if cn := certs[0].Subject.CommonName; isValidHostKey(cn) {
+			hosts = append(hosts, cn)
+		}
+	}
+	if len(hosts) == 0 {
+		return nil, fmt.Errorf("certificate has no DNS SAN and no usable common name to key argocd-tls-certs-cm by hostname")
+	}
+	return hosts, nil
+}
+
+// parseCertificates decodes every CERTIFICATE block in a PEM bundle. It errors
+// if a block fails to parse or if the bundle contains no certificate.
+func parseCertificates(caCert string) ([]*x509.Certificate, error) {
+	var certs []*x509.Certificate
+	rest := []byte(caCert)
+	for {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		if block.Type != "CERTIFICATE" {
+			continue
+		}
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("parsing certificate: %w", err)
+		}
+		certs = append(certs, cert)
+	}
+	if len(certs) == 0 {
+		return nil, fmt.Errorf("no PEM certificate block found in CA bundle")
+	}
+	return certs, nil
+}
+
+// collectDNSHosts returns the deduplicated, ConfigMap-key-safe DNS SANs across
+// all certificates, preserving first-seen order.
+func collectDNSHosts(certs []*x509.Certificate) []string {
+	var hosts []string
+	seen := map[string]bool{}
+	for _, cert := range certs {
+		for _, dns := range cert.DNSNames {
+			if isValidHostKey(dns) && !seen[dns] {
+				seen[dns] = true
+				hosts = append(hosts, dns)
+			}
+		}
+	}
+	return hosts
 }

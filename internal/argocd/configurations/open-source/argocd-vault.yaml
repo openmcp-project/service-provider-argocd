@@ -1,0 +1,294 @@
+global:
+  repository: {{ .Values.global.image.repository }}
+  tag: {{ .Values.global.image.tag }}
+repoServer:
+  deploymentAnnotations:
+    secret.reloader.stakater.com/reload: "vault-configuration"
+  volumes:
+    - name: cmp-plugin
+      configMap:
+        name: cmp-plugin
+    - name: custom-tools
+      emptyDir: {}
+    - name: cmp-tmp
+      emptyDir: {}
+    - name: k8s-sa-project
+      projected:
+        sources:
+          - serviceAccountToken:
+              path: token
+              expirationSeconds: 3600
+          - configMap:
+              name: kube-root-ca.crt
+              items:
+                - key: ca.crt
+                  path: ca.crt
+          - downwardAPI:
+              items:
+                - path: namespace
+                  fieldRef:
+                    fieldPath: metadata.namespace
+  initContainers:
+    - name: avp-binary
+      image: alpine:3.17
+      command: [ sh, -c ]
+      args:
+        - |-
+          apk add --no-cache curl &&
+          curl -fsSL -o /usr/local/bin/envsubst "https://github.com/a8m/envsubst/releases/latest/download/envsubst-Linux-x86_64" &&
+          chmod +x /usr/local/bin/envsubst &&
+          curl -fsSL -o /usr/local/bin/jq "https://github.com/stedolan/jq/releases/download/jq-1.6/jq-linux64" &&
+          chmod +x /usr/local/bin/jq &&
+          curl -fsSL -o /usr/local/bin/yq4 "https://github.com/mikefarah/yq/releases/download/v4.33.3/yq_linux_amd64" &&
+          chmod +x /usr/local/bin/yq4 &&
+          curl -fsSL -o /custom-tools/avp-helm "https://raw.githubusercontent.com/Stanislava101/argocd-sidecar/main/avp_helm_linux_amd64" &&
+          chmod +x /custom-tools/avp-helm &&
+          curl -fsSL -o /custom-tools/argocd-vault-plugin "https://raw.githubusercontent.com/Stanislava101/argocd-sidecar/main/argocd-vault-plugin_1.18.2_linux_amd64" &&
+          chmod +x /custom-tools/argocd-vault-plugin
+      volumeMounts:
+        - mountPath: /custom-tools
+          name: custom-tools
+  extraContainers:
+    # argocd-vault-plugin with Helm
+    - name: avp-helm
+      command: [ /var/run/argocd/argocd-cmp-server ]
+      image: {{ .Values.global.image.repository }}:{{ .Values.global.image.tag }}
+      envFrom:
+        - secretRef:
+            name: vault-configuration
+      env:
+        - name: ARGOCD_EXEC_TIMEOUT
+          valueFrom:
+            configMapKeyRef:
+              name: argocd-cm-exec-timeout
+              key: argocd.exec.timeout
+              optional: true
+      volumeMounts:
+        - mountPath: /var/run/argocd
+          name: var-files
+        - mountPath: /home/argocd/cmp-server/plugins
+          name: plugins
+        - mountPath: /tmp
+          name: cmp-tmp
+        # Register plugins into sidecar
+        - mountPath: /home/argocd/cmp-server/config/plugin.yaml
+          subPath: avp-helm.yaml
+          name: cmp-plugin
+        # Important: Mount tools into $PATH
+        - name: custom-tools
+          subPath: argocd-vault-plugin
+          mountPath: /usr/local/bin/argocd-vault-plugin
+        - name: custom-tools
+          subPath: avp-helm
+          mountPath: /usr/local/bin/avp-helm
+        - name: k8s-sa-project
+          mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+          readOnly: true
+    - name: avp-helm-no-discover
+      command: [ /var/run/argocd/argocd-cmp-server ]
+      image: {{ .Values.global.image.repository }}:{{ .Values.global.image.tag }}
+      envFrom:
+        - secretRef:
+            name: vault-configuration
+      env:
+        - name: ARGOCD_EXEC_TIMEOUT
+          valueFrom:
+            configMapKeyRef:
+              name: argocd-cm-exec-timeout
+              key: argocd.exec.timeout
+              optional: true
+      volumeMounts:
+        - mountPath: /var/run/argocd
+          name: var-files
+        - mountPath: /home/argocd/cmp-server/plugins
+          name: plugins
+        - mountPath: /tmp
+          name: cmp-tmp
+        # Register plugins into sidecar
+        - mountPath: /home/argocd/cmp-server/config/plugin.yaml
+          subPath: argocd-vault-plugin-helm-no-discover.yaml
+          name: cmp-plugin
+        # Important: Mount tools into $PATH
+        - name: custom-tools
+          subPath: argocd-vault-plugin
+          mountPath: /usr/local/bin/argocd-vault-plugin
+        - name: custom-tools
+          subPath: avp-helm
+          mountPath: /usr/local/bin/avp-helm
+        - name: k8s-sa-project
+          mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+          readOnly: true
+    # argocd-vault-plugin with Kustomize
+    - name: avp-kustomize
+      command: [ /var/run/argocd/argocd-cmp-server ]
+      image: {{ .Values.global.image.repository }}:{{ .Values.global.image.tag }}
+      envFrom:
+        - secretRef:
+            name: vault-configuration
+      env:
+        - name: ARGOCD_EXEC_TIMEOUT
+          valueFrom:
+            configMapKeyRef:
+              name: argocd-cm-exec-timeout
+              key: argocd.exec.timeout
+              optional: true
+      volumeMounts:
+        - mountPath: /var/run/argocd
+          name: var-files
+        - mountPath: /home/argocd/cmp-server/plugins
+          name: plugins
+        - mountPath: /tmp
+          name: cmp-tmp
+        # Register plugins into sidecar
+        - mountPath: /home/argocd/cmp-server/config/plugin.yaml
+          subPath: avp-kustomize.yaml
+          name: cmp-plugin
+        # Important: Mount tools into $PATH
+        - name: custom-tools
+          subPath: argocd-vault-plugin
+          mountPath: /usr/local/bin/argocd-vault-plugin
+        - name: k8s-sa-project
+          mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+          readOnly: true
+    # argocd-vault-plugin with plain YAML
+    - name: avp
+      command: [ /var/run/argocd/argocd-cmp-server ]
+      image: {{ .Values.global.image.repository }}:{{ .Values.global.image.tag }}
+      envFrom:
+        - secretRef:
+            name: vault-configuration
+      env:
+        - name: ARGOCD_EXEC_TIMEOUT
+          valueFrom:
+            configMapKeyRef:
+              name: argocd-cm-exec-timeout
+              key: argocd.exec.timeout
+              optional: true
+      volumeMounts:
+        - mountPath: /var/run/argocd
+          name: var-files
+        - mountPath: /home/argocd/cmp-server/plugins
+          name: plugins
+        - mountPath: /tmp
+          name: cmp-tmp
+        # Register plugins into sidecar
+        - mountPath: /home/argocd/cmp-server/config/plugin.yaml
+          subPath: avp.yaml
+          name: cmp-plugin
+        # Important: Mount tools into $PATH
+        - name: custom-tools
+          subPath: argocd-vault-plugin
+          mountPath: /usr/local/bin/argocd-vault-plugin
+        - name: k8s-sa-project
+          mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+          readOnly: true
+
+extraObjects:
+  - apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: cmp-plugin
+    data:
+      avp-kustomize.yaml: |
+        ---
+        apiVersion: argoproj.io/v1alpha1
+        kind: ConfigManagementPlugin
+        metadata:
+          name: argocd-vault-plugin-kustomize
+        spec:
+          allowConcurrency: true
+          discover:
+            find:
+              command:
+                - find
+                - "."
+                - -name
+                - kustomization.yaml
+          generate:
+            command:
+              - sh
+              - "-c"
+              - "kustomize build . | argocd-vault-plugin generate ${ARGOCD_ENV_AVP_DISABLE_TOKEN_CACHE:+--disable-token-cache} -"
+          lockRepo: false
+      avp-helm.yaml: |
+        ---
+        apiVersion: argoproj.io/v1alpha1
+        kind: ConfigManagementPlugin
+        metadata:
+          name: argocd-vault-plugin-helm
+        spec:
+          allowConcurrency: true
+          discover:
+            find:
+              command:
+                - sh
+                - "-c"
+                - "find . -name 'Chart.yaml' && find . -name 'values.yaml'"
+          init:
+            command:
+              - "avp-helm"
+              - "init"
+          generate:
+            command:
+              - sh
+              - "-c"
+              - "eval $(avp-helm generate)"
+          lockRepo: false
+      argocd-vault-plugin-helm-no-discover.yaml: |
+        ---
+        apiVersion: argoproj.io/v1alpha1
+        kind: ConfigManagementPlugin
+        metadata:
+          name: argocd-vault-plugin-helm-no-discover
+        spec:
+          allowConcurrency: true
+          init:
+            command:
+              - "avp-helm"
+              - "init"
+          generate:
+            command:
+              - sh
+              - "-c"
+              - "eval $(avp-helm generate)"
+          lockRepo: false
+      avp.yaml: |
+        ---
+        apiVersion: argoproj.io/v1alpha1
+        kind: ConfigManagementPlugin
+        metadata:
+          name: argocd-vault-plugin
+        spec:
+          allowConcurrency: true
+          discover:
+            find:
+              command:
+                - sh
+                - "-c"
+                - "find . -name '*.yaml' | xargs -I {} grep \"<path\\|avp\\.kubernetes\\.io\" {} | grep ."
+          generate:
+            command:
+              - sh
+              - "-c"
+              - 'argocd-vault-plugin generate ${ARGOCD_ENV_AVP_DISABLE_TOKEN_CACHE:+--disable-token-cache} .'
+          lockRepo: false
+
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRoleBinding
+    metadata:
+      name: argocd-repo-server-auth-delegator
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: ClusterRole
+      name: system:auth-delegator
+    subjects:
+      - kind: ServiceAccount
+        name: argocd-repo-server
+        namespace: {{ .Release.Namespace }}
+
+  - apiVersion: v1
+    kind: Secret
+    metadata:
+      name: vault-configuration
+    type: Opaque
+    stringData: {}

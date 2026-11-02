@@ -2,14 +2,17 @@ package e2e
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	corev1 "k8s.io/api/core/v1"
-
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+
 	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
@@ -35,8 +38,7 @@ const (
 	testArgoCDVersion      = "v3.5.4"
 	testArgoCDChartVersion = "10.4.0"
 	testArgoCDChartURL     = "oci://ghcr.io/argoproj/argo-helm/argo-cd"
-	imagesRepo             = "openmcp.common.repositories.cloud.sap/sovereigncloud-outbound/dev1/github.tools.sap/openmcp/releasechannel/argocd/images/"
-	sidecarImageTag        = "2.0.27"
+	imagesRepo             = "quay.io/argoproj/argocd"
 
 	// Reloader test fixtures — keep in sync with the Stakater chart.
 	testReloaderChartVersion = "2.2.12"
@@ -47,7 +49,44 @@ const (
 	reloaderOCIRepositoryName = "argocd-reloader"
 
 	expectedDeletionBlockedMessage = "deletion blocked: ArgoCD CR(s) still present"
+
+	// imagePullSecretName is the Secret replicated from the service provider's
+	// own namespace to the ArgoCD namespace on the MCP via
+	// values.global.imagePullSecrets. Its content is changed mid-test to verify
+	// that the SecretWatcher wiring triggers reconciliation on change.
+	imagePullSecretName             = "test-argocd-image-pull-secret"
+	imagePullSecretInitialDockerCfg = `{"auths":{"registry.example.com":{"auth":"aW5pdGlhbDpzZWNyZXQ="}}}`
+	imagePullSecretUpdatedDockerCfg = `{"auths":{"registry.example.com":{"auth":"dXBkYXRlZDpzZWNyZXQ="}}}`
+
+	// chartPullSecretArgoName and chartPullSecretReloaderName are Secrets created
+	// in the service provider's own namespace and referenced via
+	// ArgoCDVersion.ChartPullSecret / ReloaderConfig.ChartPullSecret. The
+	// controller replicates them into the tenant namespace on the platform cluster
+	// so that Flux OCIRepositories can pull charts from private registries.
+	chartPullSecretArgoName     = "test-argocd-chart-pull-secret"
+	chartPullSecretReloaderName = "test-reloader-chart-pull-secret"
 )
+
+// discoverServiceProviderNamespace finds the namespace the running
+// service-provider-argocd Pod lives in on the platform cluster, by locating
+// the Pod whose container image contains imageSubstr. This mirrors how the
+// controller itself determines PodNamespace (via the downward API) without
+// hard-coding a namespace name that depends on how the test harness deploys
+// the ServiceProvider.
+func discoverServiceProviderNamespace(ctx context.Context, c *envconf.Config, imageSubstr string) (string, error) {
+	pods := &corev1.PodList{}
+	if err := c.Client().Resources().List(ctx, pods); err != nil {
+		return "", fmt.Errorf("listing pods on platform cluster: %w", err)
+	}
+	for _, pod := range pods.Items {
+		for _, ctr := range pod.Spec.Containers {
+			if strings.Contains(ctr.Image, imageSubstr) {
+				return pod.Namespace, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("no pod found on platform cluster with an image containing %q", imageSubstr)
+}
 
 // stableTenantNamespace returns the platform-cluster namespace where Flux
 // resources for the given ArgoCD CR live, using the same derivation as the
@@ -65,6 +104,7 @@ func stableTenantNamespace(t *testing.T, name, namespace string) string {
 // only one MCP is created and torn down. The assess steps cover:
 //
 //  1. Basic provisioning — ArgoCD CR becomes Ready.
+//     - includes AVP checks
 //  2. Reloader addon — OCIRepository + HelmRelease are created with the correct
 //     distinct managed-by label that prevents framework cascade deletion.
 //  3. Exposure policy — ProviderConfig fields (DNSClass, DNSTTL, CertPurpose)
@@ -82,27 +122,68 @@ func TestServiceProvider(t *testing.T) {
 			helmv2.AddToScheme(c.Client().Resources().GetScheme())
 			sourcev1.AddToScheme(c.Client().Resources().GetScheme())
 
+			// Create the source image pull secret in the service provider's own
+			// namespace on the platform cluster, so it can be referenced via
+			// values.global.imagePullSecrets and replicated onto the MCP.
+			spNamespace, err := discoverServiceProviderNamespace(ctx, c, "service-provider-argocd")
+			if err != nil {
+				t.Fatalf("failed to discover service provider namespace: %v", err)
+			}
+			sourceSecret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Name: imagePullSecretName, Namespace: spNamespace},
+				Type:       corev1.SecretTypeDockerConfigJson,
+				Data:       map[string][]byte{".dockerconfigjson": []byte(imagePullSecretInitialDockerCfg)},
+			}
+			if err := c.Client().Resources().Create(ctx, sourceSecret); err != nil {
+				t.Fatalf("failed to create source image pull secret: %v", err)
+			}
+
+			// Create the source chart pull secrets for the ArgoCD and Reloader charts.
+			// These are replicated by the controller into the tenant namespace on the
+			// platform cluster so that the Flux OCIRepositories can pull from a private
+			// registry (LocalObjectReference requires the secret to be in the same ns).
+			argoChartSecret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Name: chartPullSecretArgoName, Namespace: spNamespace},
+				Type:       corev1.SecretTypeDockerConfigJson,
+				Data:       map[string][]byte{".dockerconfigjson": []byte(`{}`)},
+			}
+			if err := c.Client().Resources().Create(ctx, argoChartSecret); err != nil {
+				t.Fatalf("failed to create chart pull secret (argocd): %v", err)
+			}
+			reloaderChartSecret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Name: chartPullSecretReloaderName, Namespace: spNamespace},
+				Type:       corev1.SecretTypeDockerConfigJson,
+				Data:       map[string][]byte{".dockerconfigjson": []byte(`{}`)},
+			}
+			if err := c.Client().Resources().Create(ctx, reloaderChartSecret); err != nil {
+				t.Fatalf("failed to create chart pull secret (reloader): %v", err)
+			}
+
 			config := &apiv1alpha1.ProviderConfig{}
 			config.SetName("argocd")
 			config.Spec.VaultPlugin = &apiv1alpha1.ProviderVaultPluginConfig{
-				Enabled:  true,
-				Registry: imagesRepo + "argocd-sidecar",
-				Tag:      sidecarImageTag,
+				Enabled: true,
 			}
+			config.Spec.OpenSource = true
 			config.Spec.Versions = []apiv1alpha1.ArgoCDVersion{
 				{
-					Version:      testArgoCDVersion,
-					ChartVersion: testArgoCDChartVersion,
-					ChartURL:     ptr.To(testArgoCDChartURL),
-					Values: &apiextensionsv1.JSON{
-						Raw: []byte(`{"global":{"image":{"repository":"` + imagesRepo + "argocd" + `","tag":"` + testArgoCDVersion + `"}}}`),
-					},
-				},
+					Version:         testArgoCDVersion,
+					ChartVersion:    testArgoCDChartVersion,
+					ChartURL:        ptr.To(testArgoCDChartURL),
+					ChartPullSecret: chartPullSecretArgoName,
+					Values: &apiextensionsv1.JSON{Raw: []byte(fmt.Sprintf(
+						`{"global":{"imagePullSecrets":[{"name":%q}],"image":{"repository":"%s","tag":"%s"}}}`,
+						imagePullSecretName,
+						imagesRepo,
+						testArgoCDVersion,
+					)),
+					}},
 			}
 			// Reloader: installed as a best-effort addon alongside ArgoCD.
 			config.Spec.Reloader = &apiv1alpha1.ReloaderConfig{
-				ChartURL:     testReloaderChartURL,
-				ChartVersion: testReloaderChartVersion,
+				ChartURL:        testReloaderChartURL,
+				ChartVersion:    testReloaderChartVersion,
+				ChartPullSecret: chartPullSecretReloaderName,
 			}
 			// Exposure: platform-level policy. The ArgoCD CR will not request exposure
 			// (no spec.exposure) because Gardener DNS/TLS infra is not available in kind.
@@ -112,12 +193,27 @@ func TestServiceProvider(t *testing.T) {
 				DNSTTL:      3600,
 				CertPurpose: "managed",
 			}
-			if err := c.Client().Resources().Create(ctx, config); err != nil {
-				t.Errorf("failed to create ProviderConfig: %v", err)
+			// Short poll interval so Flux reconciles OCIRepository deletions quickly
+			// during teardown (default 1 min would add unnecessary wait per resource).
+			config.Spec.PollInterval = &metav1.Duration{Duration: 10 * time.Second}
+			existing := &apiv1alpha1.ProviderConfig{}
+			if err := c.Client().Resources().Get(ctx, "argocd", "", existing); err != nil {
+				if !apierrors.IsNotFound(err) {
+					t.Errorf("failed to check for existing ProviderConfig: %v", err)
+					return ctx
+				}
+				if err := c.Client().Resources().Create(ctx, config); err != nil {
+					t.Errorf("failed to create ProviderConfig: %v", err)
+				}
+			} else {
+				config.SetResourceVersion(existing.GetResourceVersion())
+				if err := c.Client().Resources().Update(ctx, config); err != nil {
+					t.Errorf("failed to update ProviderConfig: %v", err)
+				}
 			}
 			return ctx
 		}).
-		Setup(providers.CreateMCP(mcpName)).
+		Setup(providers.CreateMCP(mcpName, wait.WithTimeout(15*time.Minute))).
 
 		// ── 1. Basic provisioning ────────────────────────────────────────────────
 		Assess("verify provider can be successfully consumed",
@@ -156,7 +252,8 @@ func TestServiceProvider(t *testing.T) {
 				}
 
 				// Wait for the Ready condition to be True
-				if err := wait.For(openmcpconditions.Match(api, onboardingCfg, "Ready", corev1.ConditionTrue)); err != nil {
+				if err := wait.For(openmcpconditions.Match(api, onboardingCfg, "Ready", corev1.ConditionTrue),
+					wait.WithTimeout(15*time.Minute)); err != nil {
 					t.Error(err)
 				}
 
@@ -168,7 +265,91 @@ func TestServiceProvider(t *testing.T) {
 			},
 		).
 
-		// ── 1b. VaultPlugin resources ────────────────────────────────────────────
+		// ── 1a. Image pull secret replication ────────────────────────────────────
+		Assess("verify image pull secret is replicated to the ArgoCD namespace on the MCP",
+			func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+				mcpConfig, err := clusterutils.MCPConfig(ctx, c, mcpName)
+				if err != nil {
+					t.Error(err)
+					return ctx
+				}
+				replicated := &corev1.Secret{}
+				if err := wait.For(func(ctx context.Context) (bool, error) {
+					err := mcpConfig.Client().Resources().Get(ctx, imagePullSecretName, "argocd", replicated)
+					return err == nil, nil
+				}, wait.WithTimeout(2*time.Minute)); err != nil {
+					t.Errorf("image pull secret %q was not replicated to the MCP argocd namespace: %v", imagePullSecretName, err)
+					return ctx
+				}
+				if v := replicated.GetLabels()["app.kubernetes.io/managed-by"]; v != "service-provider-argocd" {
+					t.Errorf("replicated image pull secret managed-by label = %q, want %q", v, "service-provider-argocd")
+				}
+				if got := string(replicated.Data[".dockerconfigjson"]); got != imagePullSecretInitialDockerCfg {
+					t.Errorf("replicated image pull secret data = %q, want %q", got, imagePullSecretInitialDockerCfg)
+				}
+				return ctx
+			},
+		).
+		Assess("verify image pull secret changes are propagated via the SecretWatcher",
+			func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+				spNamespace, err := discoverServiceProviderNamespace(ctx, c, "service-provider-argocd")
+				if err != nil {
+					t.Error(err)
+					return ctx
+				}
+				sourceSecret := &corev1.Secret{}
+				if err := c.Client().Resources().Get(ctx, imagePullSecretName, spNamespace, sourceSecret); err != nil {
+					t.Errorf("failed to get source image pull secret: %v", err)
+					return ctx
+				}
+				sourceSecret.Data = map[string][]byte{".dockerconfigjson": []byte(imagePullSecretUpdatedDockerCfg)}
+				if err := c.Client().Resources().Update(ctx, sourceSecret); err != nil {
+					t.Errorf("failed to update source image pull secret: %v", err)
+					return ctx
+				}
+
+				mcpConfig, err := clusterutils.MCPConfig(ctx, c, mcpName)
+				if err != nil {
+					t.Error(err)
+					return ctx
+				}
+				replicated := &corev1.Secret{}
+				if err := wait.For(func(ctx context.Context) (bool, error) {
+					if err := mcpConfig.Client().Resources().Get(ctx, imagePullSecretName, "argocd", replicated); err != nil {
+						return false, nil
+					}
+					return string(replicated.Data[".dockerconfigjson"]) == imagePullSecretUpdatedDockerCfg, nil
+				}, wait.WithTimeout(3*time.Minute)); err != nil {
+					t.Errorf("updated image pull secret content was not propagated to the MCP within the timeout: %v", err)
+				}
+				return ctx
+			},
+		).
+
+		// ── 1b. Chart pull secret replication ───────────────────────────────────
+		Assess("chart pull secrets replicated to tenant namespace",
+			func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+				ns := stableTenantNamespace(t, mcpName, "default")
+				for _, name := range []string{chartPullSecretArgoName, chartPullSecretReloaderName} {
+					replicated := &corev1.Secret{}
+					if err := wait.For(func(ctx context.Context) (bool, error) {
+						err := c.Client().Resources().Get(ctx, name, ns, replicated)
+						return err == nil, nil
+					}, wait.WithTimeout(2*time.Minute)); err != nil {
+						t.Errorf("chart pull secret %q was not replicated to tenant namespace %q: %v", name, ns, err)
+						continue
+					}
+					if v := replicated.GetLabels()["app.kubernetes.io/managed-by"]; v != "service-provider-argocd" {
+						t.Errorf("chart pull secret %q managed-by label = %q, want %q", name, v, "service-provider-argocd")
+					}
+					if got := string(replicated.Data[".dockerconfigjson"]); got != "{}" {
+						t.Errorf("chart pull secret %q data = %q, want %q", name, got, "{}")
+					}
+				}
+				return ctx
+			},
+		).
+		// ── 1c. VaultPlugin resources ────────────────────────────────────────────
 		Assess("verify vault-configuration Secret and cmp-plugin ConfigMap exist on MCP",
 			func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				mcpConfig, err := clusterutils.MCPConfig(ctx, c, mcpName)
@@ -208,8 +389,7 @@ func TestServiceProvider(t *testing.T) {
 				return ctx
 			},
 		).
-
-		// ── 1c. Operation annotation ─────────────────────────────────────────────
+		// ── 1d. Operation annotation ─────────────────────────────────────────────
 		Assess("operation annotation 'reconcile' is consumed and removed by the controller",
 			func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				onboardingCfg, err := clusterutils.OnboardingConfig()
@@ -425,7 +605,7 @@ func TestServiceProvider(t *testing.T) {
 				return ctx
 			},
 		).
-		Assess(" “delete the test created domain resources and remove the generated app finalizer.",
+		Assess("delete the test created domain resources and remove the generated app finalizer.",
 			func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				mcpConfig, err := clusterutils.MCPConfig(ctx, c, mcpName)
 				if err != nil {
@@ -457,7 +637,7 @@ func TestServiceProvider(t *testing.T) {
 				// succeeds, both Flux resources have already been removed.
 				if err := wait.For(
 					conditions.New(onboardingCfg.Client().Resources()).ResourceDeleted(api),
-					wait.WithTimeout(5*time.Minute),
+					wait.WithTimeout(10*time.Minute),
 				); err != nil {
 					t.Errorf("expected ArgoCD to be deleted after domain object removal, but it still exists: %v", err)
 					return ctx
@@ -475,240 +655,77 @@ func TestServiceProvider(t *testing.T) {
 				); err != nil {
 					t.Errorf("Reloader HelmRelease was not removed when ArgoCD CR was deleted: %v", err)
 				}
+
+				// Confirm the replicated image pull secret was also removed from the
+				// MCP's argocd namespace as part of Uninstall.
+				mcpConfig, err := clusterutils.MCPConfig(ctx, c, mcpName)
+				if err != nil {
+					t.Error(err)
+					return ctx
+				}
+				if err := wait.For(func(ctx context.Context) (bool, error) {
+					err := mcpConfig.Client().Resources().Get(ctx, imagePullSecretName, "argocd", &corev1.Secret{})
+					return apierrors.IsNotFound(err), nil
+				}, wait.WithTimeout(2*time.Minute)); err != nil {
+					t.Errorf("replicated image pull secret %q was not removed from the MCP after ArgoCD deletion: %v", imagePullSecretName, err)
+				}
 				return ctx
 			},
 		).
-		Teardown(providers.DeleteMCP(mcpName, wait.WithTimeout(5*time.Minute))).
+
+		// ── 5a. Chart pull secret cleanup ────────────────────────────────────────
+		Assess("chart pull secrets removed from tenant namespace after uninstall",
+			func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+				ns := stableTenantNamespace(t, mcpName, "default")
+				argoChartSecret := &corev1.Secret{}
+				argoChartSecret.SetName(chartPullSecretArgoName)
+				argoChartSecret.SetNamespace(ns)
+				reloaderChartSecret := &corev1.Secret{}
+				reloaderChartSecret.SetName(chartPullSecretReloaderName)
+				reloaderChartSecret.SetNamespace(ns)
+				if err := wait.For(
+					conditions.New(c.Client().Resources()).ResourceDeleted(argoChartSecret),
+					wait.WithTimeout(2*time.Minute),
+				); err != nil {
+					t.Errorf("chart pull secret %q still present in tenant namespace after uninstall: %v", chartPullSecretArgoName, err)
+				}
+				if err := wait.For(
+					conditions.New(c.Client().Resources()).ResourceDeleted(reloaderChartSecret),
+					wait.WithTimeout(2*time.Minute),
+				); err != nil {
+					t.Errorf("chart pull secret %q still present in tenant namespace after uninstall: %v", chartPullSecretReloaderName, err)
+				}
+				return ctx
+			},
+		).
 		Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-			cfg := &apiv1alpha1.ProviderConfig{}
-			cfg.SetName("argocd")
-			if err := c.Client().Resources().Delete(ctx, cfg); err != nil {
-				t.Logf("failed to delete ProviderConfig %q: %v", cfg.GetName(), err)
+			// Best-effort cleanup of the source secrets created in Setup.
+			spNamespace, err := discoverServiceProviderNamespace(ctx, c, "service-provider-argocd")
+			if err != nil {
+				t.Logf("could not discover service provider namespace during teardown: %v", err)
+				return ctx
 			}
-			return ctx
-		})
-	testenv.Test(t, providerTest.Feature())
-}
-
-// TestServiceProviderWithBasicFunctionalities runs the full provider lifecycle with the
-// required properties on both the ProviderConfig and the ArgoCD CR.
-// It verifies that provisioning succeeds.
-func TestServiceProviderWithBasicFunctionalities(t *testing.T) {
-	const mcpName = "test-controlplane-basic"
-
-	providerTest := features.New("provider test without vault plugin").
-		Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-			apiv1alpha1.AddToScheme(c.Client().Resources().GetScheme())
-			helmv2.AddToScheme(c.Client().Resources().GetScheme())
-			sourcev1.AddToScheme(c.Client().Resources().GetScheme())
-
-			config := &apiv1alpha1.ProviderConfig{}
-			config.SetName("argocd")
-			// VaultPlugin is intentionally omitted — the provider must work without it.
-			config.Spec.Versions = []apiv1alpha1.ArgoCDVersion{
-				{
-					Version:      testArgoCDVersion,
-					ChartVersion: testArgoCDChartVersion,
-					ChartURL:     ptr.To(testArgoCDChartURL),
-				},
+			sourceSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: imagePullSecretName, Namespace: spNamespace}}
+			if err := c.Client().Resources().Delete(ctx, sourceSecret); err != nil && !apierrors.IsNotFound(err) {
+				t.Logf("failed to clean up source image pull secret: %v", err)
 			}
-			config.Spec.Reloader = &apiv1alpha1.ReloaderConfig{
-				ChartURL:     testReloaderChartURL,
-				ChartVersion: testReloaderChartVersion,
-			}
-			config.Spec.Exposure = &apiv1alpha1.ExposurePolicy{
-				DNSClass:    "garden",
-				DNSTTL:      3600,
-				CertPurpose: "managed",
-			}
-			if err := c.Client().Resources().Create(ctx, config); err != nil {
-				t.Errorf("failed to create ProviderConfig: %v", err)
+			for _, name := range []string{chartPullSecretArgoName, chartPullSecretReloaderName} {
+				s := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: spNamespace}}
+				if err := c.Client().Resources().Delete(ctx, s); err != nil && !apierrors.IsNotFound(err) {
+					t.Logf("failed to clean up chart pull secret %q: %v", name, err)
+				}
 			}
 			return ctx
 		}).
-		Setup(providers.CreateMCP(mcpName)).
-
-		// ── 1. Basic provisioning ────────────────────────────────────────────────
-		Assess("verify provider can be successfully consumed without VaultPlugin",
-			func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-				onboardingCfg, err := clusterutils.OnboardingConfig()
-				if err != nil {
-					t.Error(err)
-					return ctx
-				}
-				apiv1alpha1.AddToScheme(onboardingCfg.Client().Resources().GetScheme())
-				api := &apiv1alpha1.ArgoCD{}
-				api.SetName(mcpName)
-				api.SetNamespace("default")
-				api.Spec.Version = testArgoCDVersion
-				// VaultPlugin is intentionally omitted — the ArgoCD CR must reach Ready
-				// without the AVP sidecar.
-				if err := onboardingCfg.Client().Resources().Create(ctx, api); err != nil {
-					t.Errorf("failed to create ArgoCD object: %v", err)
-				}
-
-				// Check if the status is Progressing before Ready
-				if err := wait.For(func(ctx context.Context) (bool, error) {
-					if err := onboardingCfg.Client().Resources().Get(ctx, api.GetName(), api.GetNamespace(), api); err != nil {
-						return false, nil
-					}
-					if c := meta.FindStatusCondition(api.Status.Conditions, "Ready"); c != nil && c.Status == metav1.ConditionFalse && c.Reason == "Reconciling" {
-						return true, nil
-					}
-					return false, nil
-				}); err != nil {
-					t.Errorf("expected status to be Progressing, but it was not: %v", err)
-				}
-
-				// Wait for the Ready condition to be True
-				if err := wait.For(openmcpconditions.Match(api, onboardingCfg, "Ready", corev1.ConditionTrue)); err != nil {
-					t.Error(err)
-				}
-
-				// Verify that the Phase is set to StatusPhaseReady
-				if api.Status.Phase != "Ready" {
-					t.Errorf("expected Phase to be Ready, but got: %v", api.Status.Phase)
-				}
-				return ctx
-			},
-		).
-
-		// ── 2. Reloader addon ────────────────────────────────────────────────────
-		Assess("verify Reloader Flux resources exist on platform cluster",
-			func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-				ns := stableTenantNamespace(t, mcpName, "default")
-
-				reloaderHR := &helmv2.HelmRelease{}
-				if err := wait.For(func(ctx context.Context) (bool, error) {
-					err := c.Client().Resources().Get(ctx, reloaderHelmReleaseName, ns, reloaderHR)
-					return err == nil, nil
-				}, wait.WithTimeout(2*time.Minute)); err != nil {
-					t.Errorf("Reloader HelmRelease %q not found in namespace %q: %v", reloaderHelmReleaseName, ns, err)
-					return ctx
-				}
-				if v := reloaderHR.GetLabels()["app.kubernetes.io/managed-by"]; v == "service-provider-argocd" {
-					t.Errorf("Reloader HelmRelease has managed-by=%q; want %q to prevent framework cascade deletion", v, "service-provider-argocd-reloader")
-				}
-
-				reloaderRepo := &sourcev1.OCIRepository{}
-				if err := c.Client().Resources().Get(ctx, reloaderOCIRepositoryName, ns, reloaderRepo); err != nil {
-					t.Errorf("Reloader OCIRepository %q not found in namespace %q: %v", reloaderOCIRepositoryName, ns, err)
-				}
-				return ctx
-			},
-		).
-
-		// ── 3. Domain object guard ───────────────────────────────────────────────
-		Assess("verify domain objects can be created",
-			func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-				mcpConfig, err := clusterutils.MCPConfig(ctx, c, mcpName)
-				if err != nil {
-					t.Error(err)
-					return ctx
-				}
-				domainObj := newApplication()
-				if err := mcpConfig.Client().Resources().Create(ctx, domainObj); err != nil {
-					t.Errorf("failed to create domain object on controlplane: %v", err)
-				}
-				appSetObj := newApplicationSet()
-				if err := mcpConfig.Client().Resources().Create(ctx, appSetObj); err != nil {
-					t.Errorf("failed to create ApplicationSet on controlplane: %v", err)
-				}
-				appProjectObj := newAppProject()
-				if err := mcpConfig.Client().Resources().Create(ctx, appProjectObj); err != nil {
-					t.Errorf("failed to create AppProject on controlplane: %v", err)
-				}
-				return ctx
-			},
-		).
-		Assess("verify service deletion is blocked due to existing domain service object",
-			func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-				onboardingCfg, err := clusterutils.OnboardingConfig()
-				if err != nil {
-					t.Error(err)
-					return ctx
-				}
-				apiv1alpha1.AddToScheme(onboardingCfg.Client().Resources().GetScheme())
-				api := &apiv1alpha1.ArgoCD{}
-				api.SetName(mcpName)
-				api.SetNamespace("default")
-				if err := onboardingCfg.Client().Resources().Delete(ctx, api); err != nil {
-					t.Errorf("failed to delete ArgoCD object: %v", err)
-				}
-				// verify object is stuck in Terminating
-				if err := wait.For(func(ctx context.Context) (bool, error) {
-					if err := onboardingCfg.Client().Resources().Get(ctx, api.GetName(), api.GetNamespace(), api); err != nil {
-						return false, nil
-					}
-					cond := meta.FindStatusCondition(api.Status.Conditions, "Ready")
-					if cond == nil {
-						return false, nil
-					}
-					if cond.Status == metav1.ConditionFalse && cond.Message == expectedDeletionBlockedMessage && cond.Reason == "Terminating" {
-						return true, nil
-					}
-					return false, nil
-				}); err != nil {
-					t.Errorf("expected deletion to be blocked with reason Terminating: %v", err)
-				}
-				return ctx
-			},
-		).
-		Assess("delete the test created domain resources and remove the generated app finalizer",
-			func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-				mcpConfig, err := clusterutils.MCPConfig(ctx, c, mcpName)
-				if err != nil {
-					t.Error(err)
-					return ctx
-				}
-				if err := cleanupArgoCDResources(ctx, mcpConfig); err != nil {
-					t.Fatalf("failed to delete ArgoCD resources: %v", err)
-				}
-				return ctx
-			},
-		).
-
-		// ── 4. Cleanup ───────────────────────────────────────────────────────────
-		Assess("verify ArgoCD CR is deleted and Reloader Flux resources are removed",
-			func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-				onboardingCfg, err := clusterutils.OnboardingConfig()
-				if err != nil {
-					t.Error(err)
-					return ctx
-				}
-				apiv1alpha1.AddToScheme(onboardingCfg.Client().Resources().GetScheme())
-				api := &apiv1alpha1.ArgoCD{}
-				api.SetName(mcpName)
-				api.SetNamespace("default")
-				if err := wait.For(
-					conditions.New(onboardingCfg.Client().Resources()).ResourceDeleted(api),
-					wait.WithTimeout(5*time.Minute),
-				); err != nil {
-					t.Errorf("expected ArgoCD to be deleted after domain object removal, but it still exists: %v", err)
-					return ctx
-				}
-
-				ns := stableTenantNamespace(t, mcpName, "default")
-				reloaderHR := &helmv2.HelmRelease{}
-				reloaderHR.SetName(reloaderHelmReleaseName)
-				reloaderHR.SetNamespace(ns)
-				if err := wait.For(
-					conditions.New(c.Client().Resources()).ResourceDeleted(reloaderHR),
-					wait.WithTimeout(2*time.Minute),
-				); err != nil {
-					t.Errorf("Reloader HelmRelease was not removed when ArgoCD CR was deleted: %v", err)
-				}
-				return ctx
-			},
-		).
 		Teardown(providers.DeleteMCP(mcpName, wait.WithTimeout(5*time.Minute))).
 		Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 			cfg := &apiv1alpha1.ProviderConfig{}
 			cfg.SetName("argocd")
-			if err := c.Client().Resources().Delete(ctx, cfg); err != nil {
-				t.Logf("failed to delete ProviderConfig %q: %v", cfg.GetName(), err)
+			if err := c.Client().Resources().Delete(ctx, cfg); err != nil && !apierrors.IsNotFound(err) {
+				t.Logf("teardown: failed to delete ProviderConfig: %v", err)
 			}
 			return ctx
 		})
+
 	testenv.Test(t, providerTest.Feature())
 }

@@ -386,6 +386,7 @@ func main() {
 			PodNamespace:      podNamespace,
 		}).
 		AdvancedClusterAccessReconciler(clusterAccessReconciler).
+		SecretNamespace(podNamespace).
 		MustBuild()
 	if err := spr.SetupWithManager(mgr, providerName); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "argocd")
