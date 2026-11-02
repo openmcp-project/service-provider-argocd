@@ -6,6 +6,14 @@
   "ignorePresets": [
     ":ignoreModulesAndTests"
   ],
+  "packageRules": [
+    {
+      "matchPackagePatterns": [
+        "^ghcr\\.io/openmcp-project/images/"
+      ],
+      "pinDigests": false
+    }
+  ],
   "customManagers": [
     {
       "customType": "regex",
