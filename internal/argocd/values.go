@@ -182,12 +182,21 @@ func ResolveClientValues(ctx context.Context, cl client.Client, obj *apiv1alpha1
 	return result, nil
 }
 
-// mergeValuesRefs iterates refs and deep-merges each resolved value into dst.
+// mergeValuesRefs iterates refs and applies each one into dst.
 // When withTargetPath is false, only entries without a targetPath are processed;
 // when true, only entries with a targetPath are processed.
+// targetPath entries are applied directly to dst (not via a temporary map) so
+// that chartutil can navigate into existing arrays and modify only the targeted
+// index, leaving other elements intact.
 func mergeValuesRefs(ctx context.Context, cl client.Client, namespace string, dst map[string]any, refs []apiv1alpha1.ValuesReference, withTargetPath bool) error {
 	for _, ref := range refs {
 		if (ref.TargetPath != "") != withTargetPath {
+			continue
+		}
+		if withTargetPath {
+			if err := applyTargetPath(ctx, cl, namespace, dst, ref); err != nil {
+				return err
+			}
 			continue
 		}
 		vals, err := readValuesReference(ctx, cl, namespace, ref)
@@ -199,11 +208,36 @@ func mergeValuesRefs(ctx context.Context, cl client.Client, namespace string, ds
 	return nil
 }
 
+// applyTargetPath reads the scalar value from ref and writes it at
+// ref.TargetPath directly into dst. Writing into dst rather than a fresh map
+// preserves existing array contents at indices other than the targeted one.
+func applyTargetPath(ctx context.Context, cl client.Client, namespace string, dst map[string]any, ref apiv1alpha1.ValuesReference) error {
+	valuesKey := ref.ValuesKey
+	if valuesKey == "" {
+		valuesKey = "values.yaml"
+	}
+	raw, err := readRawValue(ctx, cl, namespace, ref, valuesKey)
+	if err != nil {
+		return err
+	}
+	if raw == "" {
+		return nil
+	}
+	if ref.Literal {
+		err = chartutil.ReplacePathLiteralValue(dst, ref.TargetPath, strings.TrimSpace(raw))
+	} else {
+		err = chartutil.ReplacePathValue(dst, ref.TargetPath, strings.TrimSpace(raw))
+	}
+	if err != nil {
+		return fmt.Errorf("applying targetPath %q from %s %q key %q: %w", ref.TargetPath, ref.Kind, ref.Name, valuesKey, err)
+	}
+	return nil
+}
+
 // readValuesReference reads a single ConfigMap or Secret from the onboarding
-// cluster and returns its parsed Helm values. When TargetPath is set the
-// referent's key content is treated as a scalar placed at that path rather
-// than as a full values object. Optional references that are missing are
-// silently ignored.
+// cluster and returns its parsed Helm values as a map. It is only called for
+// entries without a targetPath; targetPath entries are handled by applyTargetPath.
+// Optional references that are missing are silently ignored.
 func readValuesReference(ctx context.Context, cl client.Client, namespace string, ref apiv1alpha1.ValuesReference) (map[string]any, error) {
 	valuesKey := ref.ValuesKey
 	if valuesKey == "" {
@@ -216,20 +250,6 @@ func readValuesReference(ctx context.Context, cl client.Client, namespace string
 	}
 	if raw == "" {
 		return nil, nil
-	}
-
-	if ref.TargetPath != "" {
-		result := map[string]any{}
-		var err error
-		if ref.Literal {
-			err = chartutil.ReplacePathLiteralValue(result, ref.TargetPath, strings.TrimSpace(raw))
-		} else {
-			err = chartutil.ReplacePathValue(result, ref.TargetPath, strings.TrimSpace(raw))
-		}
-		if err != nil {
-			return nil, fmt.Errorf("parsing targetPath value from %s %q key %q: %w", ref.Kind, ref.Name, valuesKey, err)
-		}
-		return result, nil
 	}
 
 	var values map[string]any
