@@ -95,11 +95,13 @@ spec:
     dnsClass: garden
     dnsTTL: 3600
     certPurpose: managed
-  # Enable or Disable Argo CD Vault Plugin
+  # Optional: Use the open-source distributions instead of an enterprise build.
+  openSource: true
+  # Enable or Disable Argo CD Vault Plugin.
   vaultPlugin:
-    enabled: false
-    registry: "openmcp.common.repositories.cloud.sap/sovereigncloud-outbound/dev1/github.tools.sap/openmcp/releasechannel/argocd/images/argocd-sidecar"
-    tag: "2.0.27"
+    enabled: true
+    registry: "alpine"
+    tag: "3.17"
   # Optional: install the Stakater Reloader addon alongside Argo CD so
   # argocd-server restarts when its managed TLS certificate rotates.
   reloader:
@@ -113,11 +115,14 @@ spec:
       chartUrl: "oci://ghcr.io/argoproj/argo-helm/argo-cd"
       # Optional: Secret for a private chart registry (must exist in the controller namespace).
       chartPullSecret: artifactory
-      # Optional: custom Helm values passed to the managed HelmRelease.
+      # Custom Helm values passed to the managed HelmRelease.
+      # Required when spec.vaultPlugin.enabled is true: both
+      # global.image.repository and global.image.tag must be set.
       values:
         global:
           image:
             repository: quay.io/argoproj/argocd
+            tag: v3.5.4
           # Secrets listed here must already exist in the service provider's own
           # namespace (same namespace the service-provider-argocd Pod runs in,
           # e.g. openmcp-system). The controller copies them from there into the
@@ -138,8 +143,9 @@ spec:
 | `spec.reloader.chartVersion`      | string   | OCI tag of the Reloader Helm chart to install (required when set).       |
 | `spec.reloader.chartUrl`          | string   | OCI registry URL for the Reloader chart (default: Stakater public chart).|
 | `spec.reloader.chartPullSecret`   | string   | Secret name for chart registry authentication.                           |
+| `spec.openSource`                 | bool     | Controls which AVP to deploy. When `true`, the open-source AVP config is used (binaries, images from public sources). When `false`, the internal bundle is used, which requires `spec.vaultPlugin.registry` and `spec.vaultPlugin.tag` whenever `spec.vaultPlugin.enabled` is `true`. |
 | `spec.reloader.values`            | object   | Custom Helm values for the Reloader deployment.                          |
-| `spec.vaultPlugin.enabled`        | bool     | Enable/Disable AVP.                                                      |
+| `spec.vaultPlugin.enabled`        | bool     | Enable/Disable AVP. When `true`, each `spec.versions[].values` **must** set `global.image.repository` and `global.image.tag`. |
 | `spec.vaultPlugin.registry`       | string   | Registry with specified repository in which AVP docker image lives.      |
 | `spec.vaultPlugin.tag`            | string   | AVP docker image tag.                                                    |
 | `spec.versions`                   | array    | The Argo CD versions that can be installed.                              |
