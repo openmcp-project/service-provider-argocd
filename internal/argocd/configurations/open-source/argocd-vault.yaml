@@ -41,9 +41,9 @@ repoServer:
           chmod +x /usr/local/bin/jq &&
           curl -fsSL -o /usr/local/bin/yq4 "https://github.com/mikefarah/yq/releases/download/v4.33.3/yq_linux_amd64" &&
           chmod +x /usr/local/bin/yq4 &&
-          curl -fsSL -o /custom-tools/avp-helm "https://raw.githubusercontent.com/Stanislava101/argocd-sidecar/main/avp_helm_linux_amd64" &&
+          curl -fsSL -o /custom-tools/avp-helm "https://raw.githubusercontent.com/openmcp-project/service-provider-argocd/add-argocd-vault-plugin-implementation/internal/argocd/configurations/open-source/binaries/avp_helm_linux_amd64" &&
           chmod +x /custom-tools/avp-helm &&
-          curl -fsSL -o /custom-tools/argocd-vault-plugin "https://raw.githubusercontent.com/Stanislava101/argocd-sidecar/main/argocd-vault-plugin_1.18.2_linux_amd64" &&
+          curl -fsSL -o /custom-tools/argocd-vault-plugin "https://raw.githubusercontent.com/openmcp-project/service-provider-argocd/add-argocd-vault-plugin-implementation/internal/argocd/configurations/open-source/binaries/argocd-vault-plugin_1.18.2_linux_amd64" &&
           chmod +x /custom-tools/argocd-vault-plugin
       volumeMounts:
         - mountPath: /custom-tools
