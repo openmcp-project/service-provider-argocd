@@ -62,6 +62,22 @@ spec:
     # Optional: restrict LoadBalancer access to these CIDR ranges.
     allowedIPs:
       - 203.0.113.0/24
+  # Optional: additional Helm values merged below the operator-managed ones.
+  values:
+    server:
+      replicas: 2
+  # Optional: additional Helm values sourced from ConfigMaps or Secrets.
+  valuesFrom:
+    - kind: ConfigMap
+      name: test-cm
+    - kind: Secret
+      name: test-secret
+      optional: true
+    - kind: ConfigMap
+      name: test-cm-target-path
+      valuesKey: custom-key
+      targetPath: configs.cm.timeout\.reconciliation
+      literal: true
 ```
 
 | Field                    | Type   | Description                                                                           |
@@ -72,7 +88,20 @@ spec:
 | `spec.exposure.host`     | string | Sub-domain label (e.g. `argocd`) or a fully-qualified domain name. A bare label is completed with the shoot's root domain, derived from the MCP apiserver host. |
 | `spec.exposure.allowedIPs` | array | Optional CIDR ranges allowed to reach the LoadBalancer. Empty means all sources. Invalid CIDRs are rejected. |
 | `status.endpoint`        | string | The externally reachable URL, published only once exposure is provisioned and ready.  |
+| `spec.values`            | object | Optional inline Helm values merged below operator-managed values. |
+| `spec.valuesFrom`        | array | Optional list of ConfigMaps or Secrets that supply Helm values. |
+| `spec.valuesFrom[].kind` | string | Type of the referent. Must be `ConfigMap` or `Secret`. |
+| `spec.valuesFrom[].name` | string | Name of the referent in the same namespace as the `ArgoCD` resource. |
+| `spec.valuesFrom[].valuesKey` | string | Data key inside the referent. Defaults to `values.yaml`. |
+| `spec.valuesFrom[].targetPath` | string | The YAML dot notation path at which the value should be merged. Dots in key names can be escaped with `\.` (e.g. `configs.cm.timeout\.reconciliation`). |
+| `spec.valuesFrom[].literal` | bool | When `true`, the value is stored verbatim (bypasses Helm `--set` parser). Has no effect when `targetPath` is empty. Defaults to `false`. |
+| `spec.valuesFrom[].optional` | bool | When `true`, a missing ConfigMap or Secret reference is silently ignored instead of causing an error. Defaults to `false`. |
 
+Merge order of `spec.values` and `spec.valuesFrom` (lowest to highest priority):
+1. `spec.valuesFrom` entries **without** `targetPath`
+2. `spec.values`
+3. `spec.valuesFrom` entries **with** `targetPath`
+4. operator values from `ProviderConfig`
 
 ### ProviderConfig
 
