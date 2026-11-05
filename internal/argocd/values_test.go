@@ -398,7 +398,7 @@ func cmpMap(t *testing.T, got, want map[string]any) {
 	t.Helper()
 	gotJSON, _ := json.Marshal(got)
 	wantJSON, _ := json.Marshal(want)
-	if string(gotJSON) != string(wantJSON) {
+	if !bytes.Equal(gotJSON, wantJSON) {
 		t.Fatalf("values mismatch:\n  got:  %s\n  want: %s", gotJSON, wantJSON)
 	}
 }
