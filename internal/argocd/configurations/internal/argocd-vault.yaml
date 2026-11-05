@@ -228,7 +228,7 @@ extraObjects:
               - "init"
           generate:
             command:
-              - sh
+              - bash
               - "-c"
               - "eval $(avp-helm generate)"
           lockRepo: false
@@ -246,7 +246,7 @@ extraObjects:
               - "init"
           generate:
             command:
-              - sh
+              - bash
               - "-c"
               - "eval $(avp-helm generate)"
           lockRepo: false
