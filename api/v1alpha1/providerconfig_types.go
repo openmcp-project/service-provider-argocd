@@ -25,6 +25,7 @@ import (
 )
 
 // ProviderConfigSpec defines the desired state of ProviderConfig
+// +kubebuilder:validation:XValidation:rule="self.openSource || !has(self.vaultPlugin) || !self.vaultPlugin.enabled || (has(self.vaultPlugin.registry) && size(self.vaultPlugin.registry) > 0 && has(self.vaultPlugin.tag) && size(self.vaultPlugin.tag) > 0)",message="spec.vaultPlugin.registry and spec.vaultPlugin.tag are required when spec.vaultPlugin.enabled is true and spec.openSource is false"
 type ProviderConfigSpec struct {
 	// Versions specify the valid inputs for the ArgoCD.Spec.Version field.
 	// Each entry describes an installable ArgoCD version and its deployment
@@ -63,6 +64,50 @@ type ProviderConfigSpec struct {
 	// hosts and other services that use a private certificate authority.
 	// +optional
 	CABundleSecret string `json:"caBundleSecret,omitempty"`
+
+	// VaultPlugin optionally enables the ArgoCD Vault Plugin (AVP) sidecars on
+	// the ArgoCD repo-server. When set, the provider merges the bundled AVP Helm
+	// values into every HelmRelease it creates, injecting the initContainer and
+	// sidecar containers (avp-helm, avp-helm-no-discover, avp-kustomize, avp)
+	// that the plugin requires. When nil, AVP is not configured.
+	// +optional
+	VaultPlugin *ProviderVaultPluginConfig `json:"vaultPlugin,omitempty"`
+
+	// OpenSource selects which flavour of the ArgoCD Vault Plugin configuration
+	// to apply. When true, the open-source AVP configuration bundle is used
+	// (the plugin binaries are fetched from public sources and no custom image
+	// registry/tag is required). When false (the default), the internal AVP
+	// configuration bundle is used, which pulls the plugin from an internal
+	// image registry and therefore requires spec.vaultPlugin.registry and
+	// spec.vaultPlugin.tag when AVP is enabled.
+	// +optional
+	OpenSource bool `json:"openSource,omitempty"`
+}
+
+// ProviderVaultPluginConfig enables and configures the ArgoCD Vault Plugin
+// (AVP) addon at the platform level, including the sidecar image coordinates.
+type ProviderVaultPluginConfig struct {
+	// Enabled controls whether AVP sidecars are injected into the ArgoCD
+	// repo-server. Setting this to false (or omitting the VaultPlugin field
+	// entirely) leaves ArgoCD untouched.
+	// +required
+	Enabled bool `json:"enabled"`
+
+	// Registry is the container image registry (repository) for the ArgoCD
+	// Vault Plugin sidecar image. It is combined with Tag to form the image
+	// reference used by the AVP initContainer and sidecar containers. It is
+	// required for internal installations (spec.openSource=false) when AVP is
+	// enabled, and ignored for open-source installations.
+	// +optional
+	Registry string `json:"registry,omitempty"`
+
+	// Tag is the image tag for the ArgoCD Vault Plugin sidecar image. It is
+	// combined with Registry to form the image reference used by the AVP
+	// initContainer and sidecar containers. It is required for internal
+	// installations (spec.openSource=false) when AVP is enabled, and ignored
+	// for open-source installations.
+	// +optional
+	Tag string `json:"tag,omitempty"`
 }
 
 // ReloaderConfig describes the Stakater Reloader Helm chart to install
@@ -276,6 +321,35 @@ func (o *ProviderConfig) ReloaderConfig() (ReloaderConfig, bool) {
 		cfg.ChartURL = DefaultReloaderChartURL
 	}
 	return cfg, true
+}
+
+// VaultPluginEnabled reports whether the ArgoCD Vault Plugin addon is enabled
+// in the ProviderConfig. It returns false when VaultPlugin is nil or its
+// Enabled field is false.
+func (o *ProviderConfig) VaultPluginEnabled() bool {
+	if o == nil || o.Spec.VaultPlugin == nil {
+		return false
+	}
+	return o.Spec.VaultPlugin.Enabled
+}
+
+// VaultPluginImage returns the registry and tag configured for the ArgoCD
+// Vault Plugin sidecar image. It returns empty strings when VaultPlugin is nil.
+func (o *ProviderConfig) VaultPluginImage() (registry, tag string) {
+	if o == nil || o.Spec.VaultPlugin == nil {
+		return "", ""
+	}
+	return o.Spec.VaultPlugin.Registry, o.Spec.VaultPlugin.Tag
+}
+
+// OpenSource reports whether this ProviderConfig requests the open-source
+// flavour of the ArgoCD Vault Plugin configuration. It returns false (the
+// internal flavour) when the receiver is nil.
+func (o *ProviderConfig) OpenSource() bool {
+	if o == nil {
+		return false
+	}
+	return o.Spec.OpenSource
 }
 
 // CABundleSecret returns the name of the Secret holding the custom CA bundle,

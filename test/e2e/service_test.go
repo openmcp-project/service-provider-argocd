@@ -12,6 +12,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+
 	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
@@ -34,9 +35,10 @@ import (
 // requested by the ArgoCD resource. Keep these in sync with the chart that is
 // actually published at the given URL.
 const (
-	testArgoCDVersion      = "3.5.1"
+	testArgoCDVersion      = "v3.5.4"
 	testArgoCDChartVersion = "10.4.0"
 	testArgoCDChartURL     = "oci://ghcr.io/argoproj/argo-helm/argo-cd"
+	imagesRepo             = "quay.io/argoproj/argocd"
 
 	// Reloader test fixtures — keep in sync with the Stakater chart.
 	testReloaderChartVersion = "2.2.12"
@@ -102,6 +104,7 @@ func stableTenantNamespace(t *testing.T, name, namespace string) string {
 // only one MCP is created and torn down. The assess steps cover:
 //
 //  1. Basic provisioning — ArgoCD CR becomes Ready.
+//     - includes AVP checks
 //  2. Reloader addon — OCIRepository + HelmRelease are created with the correct
 //     distinct managed-by label that prevents framework cascade deletion.
 //  3. Exposure policy — ProviderConfig fields (DNSClass, DNSTTL, CertPurpose)
@@ -158,6 +161,10 @@ func TestServiceProvider(t *testing.T) {
 
 			config := &apiv1alpha1.ProviderConfig{}
 			config.SetName("argocd")
+			config.Spec.VaultPlugin = &apiv1alpha1.ProviderVaultPluginConfig{
+				Enabled: true,
+			}
+			config.Spec.OpenSource = true
 			config.Spec.Versions = []apiv1alpha1.ArgoCDVersion{
 				{
 					Version:         testArgoCDVersion,
@@ -165,9 +172,12 @@ func TestServiceProvider(t *testing.T) {
 					ChartURL:        ptr.To(testArgoCDChartURL),
 					ChartPullSecret: chartPullSecretArgoName,
 					Values: &apiextensionsv1.JSON{Raw: []byte(fmt.Sprintf(
-						`{"global":{"imagePullSecrets":[{"name":%q}]}}`, imagePullSecretName,
-					))},
-				},
+						`{"global":{"imagePullSecrets":[{"name":%q}],"image":{"repository":"%s","tag":"%s"}}}`,
+						imagePullSecretName,
+						imagesRepo,
+						testArgoCDVersion,
+					)),
+					}},
 			}
 			// Reloader: installed as a best-effort addon alongside ArgoCD.
 			config.Spec.Reloader = &apiv1alpha1.ReloaderConfig{
@@ -218,6 +228,9 @@ func TestServiceProvider(t *testing.T) {
 				api.SetName(mcpName)
 				api.SetNamespace("default")
 				api.Spec.Version = testArgoCDVersion
+				api.Spec.VaultPlugin = &apiv1alpha1.VaultPluginConfig{
+					Enabled: true,
+				}
 				// spec.exposure is intentionally absent — Gardener DNS/TLS resources are not
 				// available in kind; the Exposure policy in the ProviderConfig is a no-op
 				// unless the tenant opts in.
@@ -336,8 +349,47 @@ func TestServiceProvider(t *testing.T) {
 				return ctx
 			},
 		).
+		// ── 1c. VaultPlugin resources ────────────────────────────────────────────
+		Assess("verify vault-configuration Secret and cmp-plugin ConfigMap exist on MCP",
+			func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+				mcpConfig, err := clusterutils.MCPConfig(ctx, c, mcpName)
+				if err != nil {
+					t.Fatal(err)
+					return ctx
+				}
 
-		// ── 1c. Operation annotation ─────────────────────────────────────────────
+				// cleanupArgoCD deletes the ArgoCD CR so the cluster is not left
+				// dirty when either VaultPlugin resource is missing.
+				cleanupArgoCD := func() {
+					onboardingCfg, cfgErr := clusterutils.OnboardingConfig()
+					if cfgErr != nil {
+						return
+					}
+					apiv1alpha1.AddToScheme(onboardingCfg.Client().Resources().GetScheme())
+					api := &apiv1alpha1.ArgoCD{}
+					api.SetName(mcpName)
+					api.SetNamespace("default")
+					_ = onboardingCfg.Client().Resources().Delete(ctx, api)
+				}
+
+				secret := &corev1.Secret{}
+				if err := mcpConfig.Client().Resources("argocd").Get(ctx, "vault-configuration", "argocd", secret); err != nil {
+					cleanupArgoCD()
+					t.Fatalf("vault-configuration Secret not found in namespace argocd on MCP: %v", err)
+				}
+				t.Logf("vault-configuration Secret found in namespace argocd on MCP")
+
+				cm := &corev1.ConfigMap{}
+				if err := mcpConfig.Client().Resources("argocd").Get(ctx, "cmp-plugin", "argocd", cm); err != nil {
+					cleanupArgoCD()
+					t.Fatalf("cmp-plugin ConfigMap not found in namespace argocd on MCP: %v", err)
+				}
+				t.Logf("cmp-plugin ConfigMap found in namespace argocd on MCP")
+
+				return ctx
+			},
+		).
+		// ── 1d. Operation annotation ─────────────────────────────────────────────
 		Assess("operation annotation 'reconcile' is consumed and removed by the controller",
 			func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				onboardingCfg, err := clusterutils.OnboardingConfig()

@@ -64,6 +64,17 @@ type Provisioner struct {
 	// Secret. It is populated by ensureCABundle and consumed by applyHelmRelease
 	// to inject the CA into ArgoCD's trusted-certificate configuration.
 	caCert string
+	// vaultPluginEnabled, when true, merges the bundled AVP Helm values into
+	// the ArgoCD HelmRelease to enable the ArgoCD Vault Plugin sidecars and
+	// applies the bundled secrets to the ArgoCD namespace on the MCP.
+	vaultPluginEnabled bool
+	// vaultPluginRegistry and vaultPluginTag override the image reference used
+	// by the ArgoCD Vault Plugin initContainer and sidecar containers.
+	vaultPluginRegistry string
+	vaultPluginTag      string
+	// vaultPluginOpenSource selects the open-source AVP configuration bundle
+	// when true, and the internal bundle when false.
+	vaultPluginOpenSource bool
 }
 
 // ProvisionerConfig groups the inputs required to build a Provisioner.
@@ -79,6 +90,10 @@ type ProvisionerConfig struct {
 	Reloader                *apiv1alpha1.ReloaderConfig
 	CABundleSecret          string
 	CABundleSourceNamespace string
+	VaultPluginEnabled      bool
+	VaultPluginRegistry     string
+	VaultPluginTag          string
+	VaultPluginOpenSource   bool
 }
 
 // NewProvisioner constructs a Provisioner, applying the default target
@@ -99,6 +114,10 @@ func NewProvisioner(cfg ProvisionerConfig) *Provisioner {
 		reloader:                cfg.Reloader,
 		caBundleSecret:          cfg.CABundleSecret,
 		caBundleSourceNamespace: cfg.CABundleSourceNamespace,
+		vaultPluginEnabled:      cfg.VaultPluginEnabled,
+		vaultPluginRegistry:     cfg.VaultPluginRegistry,
+		vaultPluginTag:          cfg.VaultPluginTag,
+		vaultPluginOpenSource:   cfg.VaultPluginOpenSource,
 	}
 }
 
@@ -365,7 +384,13 @@ func (p *Provisioner) applyHelmRelease(ctx context.Context, version apiv1alpha1.
 	hr := &helmv2.HelmRelease{
 		ObjectMeta: metav1.ObjectMeta{Name: helmReleaseName, Namespace: p.tenantNamespace},
 	}
-	values, err := buildValues(version.Values, p.exposure, p.caCert)
+	values, err := buildValues(version.Values, p.exposure, p.caCert, vaultPluginValues{
+		enabled:    p.vaultPluginEnabled,
+		registry:   p.vaultPluginRegistry,
+		tag:        p.vaultPluginTag,
+		namespace:  p.mcpNamespace,
+		openSource: p.vaultPluginOpenSource,
+	}, version.Version)
 	if err != nil {
 		return fmt.Errorf("building Helm values: %w", err)
 	}
@@ -747,8 +772,7 @@ func (p *Provisioner) ensureCABundle(ctx context.Context) error {
 	return nil
 }
 
-// RemoveCABundle deletes the CA bundle Secret that was synced into the tenant
-// namespace. It is a no-op when no CA bundle is configured or the secret no
+// RemoveCABundle deletes the CA bundle Secret that was synced into the tenant// namespace. It is a no-op when no CA bundle is configured or the secret no
 // longer exists.
 //
 // During uninstall this must be called only after IsUninstalled returns true,

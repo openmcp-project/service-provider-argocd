@@ -72,6 +72,16 @@ spec:
                     description: DNSTTL is the TTL, in seconds, for managed DNS records.
                     type: integer
                 type: object
+              openSource:
+                description: |-
+                  OpenSource selects which flavour of the ArgoCD Vault Plugin configuration
+                  to apply. When true, the open-source AVP configuration bundle is used
+                  (the plugin binaries are fetched from public sources and no custom image
+                  registry/tag is required). When false (the default), the internal AVP
+                  configuration bundle is used, which pulls the plugin from an internal
+                  image registry and therefore requires spec.vaultPlugin.registry and
+                  spec.vaultPlugin.tag when AVP is enabled.
+                type: boolean
               pollInterval:
                 default: 1m
                 description: PollInterval determines how often to reconcile resources
@@ -119,6 +129,39 @@ spec:
                     type: string
                 required:
                 - chartVersion
+                type: object
+              vaultPlugin:
+                description: |-
+                  VaultPlugin optionally enables the ArgoCD Vault Plugin (AVP) sidecars on
+                  the ArgoCD repo-server. When set, the provider merges the bundled AVP Helm
+                  values into every HelmRelease it creates, injecting the initContainer and
+                  sidecar containers (avp-helm, avp-helm-no-discover, avp-kustomize, avp)
+                  that the plugin requires. When nil, AVP is not configured.
+                properties:
+                  enabled:
+                    description: |-
+                      Enabled controls whether AVP sidecars are injected into the ArgoCD
+                      repo-server. Setting this to false (or omitting the VaultPlugin field
+                      entirely) leaves ArgoCD untouched.
+                    type: boolean
+                  registry:
+                    description: |-
+                      Registry is the container image registry (repository) for the ArgoCD
+                      Vault Plugin sidecar image. It is combined with Tag to form the image
+                      reference used by the AVP initContainer and sidecar containers. It is
+                      required for internal installations (spec.openSource=false) when AVP is
+                      enabled, and ignored for open-source installations.
+                    type: string
+                  tag:
+                    description: |-
+                      Tag is the image tag for the ArgoCD Vault Plugin sidecar image. It is
+                      combined with Registry to form the image reference used by the AVP
+                      initContainer and sidecar containers. It is required for internal
+                      installations (spec.openSource=false) when AVP is enabled, and ignored
+                      for open-source installations.
+                    type: string
+                required:
+                - enabled
                 type: object
               versions:
                 description: |-
@@ -174,6 +217,12 @@ spec:
             required:
             - versions
             type: object
+            x-kubernetes-validations:
+            - message: spec.vaultPlugin.registry and spec.vaultPlugin.tag are required
+                when spec.vaultPlugin.enabled is true and spec.openSource is false
+              rule: self.openSource || !has(self.vaultPlugin) || !self.vaultPlugin.enabled
+                || (has(self.vaultPlugin.registry) && size(self.vaultPlugin.registry)
+                > 0 && has(self.vaultPlugin.tag) && size(self.vaultPlugin.tag) > 0)
           status:
             description: status defines the observed state of ProviderConfig
             properties:

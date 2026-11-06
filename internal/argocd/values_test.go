@@ -156,7 +156,7 @@ func nestedString(t *testing.T, m map[string]any, keys ...string) string {
 }
 
 func TestBuildValues_EmptyNoCA(t *testing.T) {
-	got, err := buildValues(nil, ExposureValues{}, "")
+	got, err := buildValues(nil, ExposureValues{}, "", vaultPluginValues{enabled: false}, "v3.5.4")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +169,7 @@ func TestBuildValues_CAOnly(t *testing.T) {
 	const host = "git.example.com"
 	pem := testCertPEM(t, "test-ca", host)
 
-	got, err := buildValues(nil, ExposureValues{}, pem)
+	got, err := buildValues(nil, ExposureValues{}, pem, vaultPluginValues{enabled: false}, "v3.5.4")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +194,7 @@ func TestBuildValues_CAPreservesBaseValues(t *testing.T) {
 		},
 	})
 
-	got, err := buildValues(base, ExposureValues{}, pem)
+	got, err := buildValues(base, ExposureValues{}, pem, vaultPluginValues{enabled: false}, "v3.5.4")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +228,7 @@ func TestBuildValues_ExposureAndCA(t *testing.T) {
 		CertPurpose: "managed",
 	}
 
-	got, err := buildValues(nil, exposure, pem)
+	got, err := buildValues(nil, exposure, pem, vaultPluginValues{enabled: false}, "v3.5.4")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,7 +251,7 @@ func TestBuildValues_CAMultipleHosts(t *testing.T) {
 	hosts := []string{"git.example.com", "registry.example.com"}
 	pem := testCertPEM(t, "test-ca", hosts...)
 
-	got, err := buildValues(nil, ExposureValues{}, pem)
+	got, err := buildValues(nil, ExposureValues{}, pem, vaultPluginValues{enabled: false}, "v3.5.4")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,7 +270,7 @@ func TestBuildValues_CAFallsBackToCommonName(t *testing.T) {
 	const cn = "git.internal"
 	pem := testCertPEM(t, cn)
 
-	got, err := buildValues(nil, ExposureValues{}, pem)
+	got, err := buildValues(nil, ExposureValues{}, pem, vaultPluginValues{enabled: false}, "v3.5.4")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,7 +283,7 @@ func TestBuildValues_CAFallsBackToCommonName(t *testing.T) {
 }
 
 func TestBuildValues_CAUnparseableIsError(t *testing.T) {
-	_, err := buildValues(nil, ExposureValues{}, "-----BEGIN CERTIFICATE-----\nMIItest\n-----END CERTIFICATE-----\n")
+	_, err := buildValues(nil, ExposureValues{}, "-----BEGIN CERTIFICATE-----\nMIItest\n-----END CERTIFICATE-----\n", vaultPluginValues{enabled: false}, "v3.5.4")
 	if err == nil {
 		t.Fatal("expected an error for an unparseable CA cert, got nil")
 	}
@@ -293,7 +293,7 @@ func TestBuildValues_CANoUsableHostIsError(t *testing.T) {
 	// A cert with neither SAN nor a hostname-shaped Common Name cannot key the
 	// trusted-certificate ConfigMap, so it must surface as an error.
 	pem := testCertPEM(t, "ACME Corporate Root CA")
-	_, err := buildValues(nil, ExposureValues{}, pem)
+	_, err := buildValues(nil, ExposureValues{}, pem, vaultPluginValues{enabled: false}, "v3.5.4")
 	if err == nil {
 		t.Fatal("expected an error when the cert has no usable hostname, got nil")
 	}
@@ -302,7 +302,7 @@ func TestBuildValues_CANoUsableHostIsError(t *testing.T) {
 func TestBuildValues_NoCARegressionBaseOnly(t *testing.T) {
 	base := rawValues(t, map[string]any{"server": map[string]any{"replicas": 2}})
 
-	got, err := buildValues(base, ExposureValues{}, "")
+	got, err := buildValues(base, ExposureValues{}, "", vaultPluginValues{enabled: false}, "v3.5.4")
 	if err != nil {
 		t.Fatal(err)
 	}
