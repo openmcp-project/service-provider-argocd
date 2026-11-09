@@ -105,6 +105,7 @@ type ArgoCDStatus struct {
 // +kubebuilder:printcolumn:JSONPath=`.status.endpoint`,name="Endpoint",type=string
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:metadata:labels="openmcp.cloud/cluster=onboarding"
+// +kubebuilder:metadata:labels="services.open-control-plane.io/kind=ArgoCD"
 type ArgoCD struct {
 	metav1.TypeMeta `json:",inline"`
 
