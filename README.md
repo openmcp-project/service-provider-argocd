@@ -53,8 +53,6 @@ metadata:
   name: my-argocd
 spec:
   version: "v3.1.0"
-  # Optional: namespace on the ManagedControlPlane to install Argo CD into.
-  namespaceOverride: argocd
   # Optional: expose the Argo CD server externally via a TLS-terminated
   # LoadBalancer (see "Exposure" below). Omit to keep Argo CD in-cluster only.
   exposure:
@@ -83,7 +81,6 @@ spec:
 | Field                    | Type   | Description                                                                           |
 | ------------------------ | ------ | ------------------------------------------------------------------------------------- |
 | `spec.version`           | string | The Argo CD version to install. Must match a version defined in the `ProviderConfig`. |
-| `spec.namespaceOverride` | string | Target namespace on the ManagedControlPlane. Defaults to the provider's namespace.    |
 | `spec.exposure`          | object | Optional external exposure of the Argo CD server. Its presence enables exposure.      |
 | `spec.exposure.host`     | string | Sub-domain label (e.g. `argocd`) or a fully-qualified domain name. A bare label is completed with the shoot's root domain, derived from the MCP apiserver host. |
 | `spec.exposure.allowedIPs` | array | Optional CIDR ranges allowed to reach the LoadBalancer. Empty means all sources. Invalid CIDRs are rejected. |

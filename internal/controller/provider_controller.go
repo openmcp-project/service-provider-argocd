@@ -171,7 +171,11 @@ func (r *ArgoCDReconciler) Delete(ctx context.Context, obj *apiv1alpha1.ArgoCD, 
 	log := logf.FromContext(ctx)
 	serviceprovider.StatusTerminatingWithReason(obj, reasonTerminating, "Resource termination initiated; cleanup tasks are in progress")
 
-	provisioner, err := r.newProvisioner(obj, pc, clusterCtx, nil)
+	clientValues, err := argocd.ResolveClientValues(ctx, r.OnboardingCluster.Client(), obj)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("resolving client values: %w", err)
+	}
+	provisioner, err := r.newProvisioner(obj, pc, clusterCtx, nil, providerNamespace(clientValues))
 	if err != nil {
 		log.Error(err, "failed to create provisioner")
 		argocd.StatusFailed(obj, reasonProvisionerCreationFailed, err.Error())
@@ -226,13 +230,14 @@ func (r *ArgoCDReconciler) provisionerFor(ctx context.Context, obj *apiv1alpha1.
 	if err != nil {
 		return nil, fmt.Errorf("resolving client values: %w", err)
 	}
-	return r.newProvisioner(obj, pc, clusterCtx, clientValues)
+
+	return r.newProvisioner(obj, pc, clusterCtx, clientValues, providerNamespace(clientValues))
 }
 
 // newProvisioner builds a Provisioner for the given reconcile request. The Flux
 // resources live in the MCP's tenant namespace on the platform cluster, next to
 // the MCP kubeconfig secret that the HelmRelease references.
-func (r *ArgoCDReconciler) newProvisioner(obj *apiv1alpha1.ArgoCD, pc *apiv1alpha1.ProviderConfig, clusterCtx clusteraccess.ClusterContext, clientValues map[string]any) (*argocd.Provisioner, error) {
+func (r *ArgoCDReconciler) newProvisioner(obj *apiv1alpha1.ArgoCD, pc *apiv1alpha1.ProviderConfig, clusterCtx clusteraccess.ClusterContext, clientValues map[string]any, mcpNamespace string) (*argocd.Provisioner, error) {
 	tenantNamespace := clusterCtx.MCPAccessSecretKey.Namespace
 	if tenantNamespace == "" {
 		// Fall back to a stable, deterministic namespace derived from the request.
@@ -247,7 +252,7 @@ func (r *ArgoCDReconciler) newProvisioner(obj *apiv1alpha1.ArgoCD, pc *apiv1alph
 		PlatformClient:          r.PlatformCluster.Client(),
 		MCPClient:               clusterCtx.MCPCluster.Client(),
 		TenantNamespace:         tenantNamespace,
-		MCPNamespace:            providerNamespace(obj),
+		MCPNamespace:            mcpNamespace,
 		KubeConfigSecretName:    clusterCtx.MCPAccessSecretKey.Name,
 		PodNamespace:            r.PodNamespace,
 		PollInterval:            pc.PollInterval(),
@@ -298,13 +303,12 @@ func versionReferencesSecret(log logr.Logger, version apiv1alpha1.ArgoCDVersion,
 	return false
 }
 
-// providerNamespace resolves the target MCP namespace from the ArgoCD object,
-// tolerating a nil config.
-func providerNamespace(obj *apiv1alpha1.ArgoCD) string {
-	if obj == nil {
-		return ""
-	}
-	return obj.Spec.NamespaceOverride
+// providerNamespace resolves the target MCP namespace from the resolved client
+// values. It reads the ArgoCD chart's namespaceOverride value if set, returning
+// an empty string otherwise (NewProvisioner defaults that to DefaultNamespace).
+func providerNamespace(clientValues map[string]any) string {
+	ns, _ := clientValues["namespaceOverride"].(string)
+	return ns
 }
 
 // hostPattern validates the tenant-supplied exposure host. It accepts a single

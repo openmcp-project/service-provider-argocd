@@ -75,12 +75,6 @@ spec:
                 required:
                 - host
                 type: object
-              namespaceOverride:
-                description: |-
-                  namespaceOverride overrides the default namespace into which ArgoCD is
-                  installed on the target cluster. If empty, the provider's default
-                  namespace is used.
-                type: string
               values:
                 description: |-
                   Values holds optional inline Helm chart values applied on top of any
