@@ -162,7 +162,9 @@ func TestServiceProvider(t *testing.T) {
 			config := &apiv1alpha1.ProviderConfig{}
 			config.SetName("argocd")
 			config.Spec.VaultPlugin = &apiv1alpha1.ProviderVaultPluginConfig{
-				Enabled: true,
+				Enabled:  true,
+				Registry: "alpine",
+				Tag:      "latest",
 			}
 			config.Spec.OpenSource = true
 			config.Spec.Versions = []apiv1alpha1.ArgoCDVersion{

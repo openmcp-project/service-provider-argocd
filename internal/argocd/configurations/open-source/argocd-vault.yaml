@@ -30,7 +30,7 @@ repoServer:
                     fieldPath: metadata.namespace
   initContainers:
     - name: avp-binary
-      image: alpine:3.17
+      image: {{ .VaultPlugin.Registry }}:{{ .VaultPlugin.Tag }}
       command: [ sh, -c ]
       args:
         - |-
