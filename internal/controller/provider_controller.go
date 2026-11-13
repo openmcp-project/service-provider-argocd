@@ -171,11 +171,7 @@ func (r *ArgoCDReconciler) Delete(ctx context.Context, obj *apiv1alpha1.ArgoCD, 
 	log := logf.FromContext(ctx)
 	serviceprovider.StatusTerminatingWithReason(obj, reasonTerminating, "Resource termination initiated; cleanup tasks are in progress")
 
-	clientValues, err := argocd.ResolveClientValues(ctx, r.OnboardingCluster.Client(), obj)
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("resolving client values: %w", err)
-	}
-	provisioner, err := r.newProvisioner(obj, pc, clusterCtx, nil, providerNamespace(clientValues))
+	provisioner, err := r.provisionerFor(ctx, obj, pc, clusterCtx)
 	if err != nil {
 		log.Error(err, "failed to create provisioner")
 		argocd.StatusFailed(obj, reasonProvisionerCreationFailed, err.Error())
@@ -223,8 +219,7 @@ func (r *ArgoCDReconciler) Delete(ctx context.Context, obj *apiv1alpha1.ArgoCD, 
 }
 
 // provisionerFor resolves client values from the ArgoCD CR and builds a
-// Provisioner for the given reconcile request. Used only on the create/update
-// path where client values must be applied to the HelmRelease.
+// Provisioner for the given reconcile request.
 func (r *ArgoCDReconciler) provisionerFor(ctx context.Context, obj *apiv1alpha1.ArgoCD, pc *apiv1alpha1.ProviderConfig, clusterCtx clusteraccess.ClusterContext) (*argocd.Provisioner, error) {
 	clientValues, err := argocd.ResolveClientValues(ctx, r.OnboardingCluster.Client(), obj)
 	if err != nil {
