@@ -37,8 +37,8 @@ github.com/felixge/httpsnoop v1.1.0 h1:3YtUj32ZZkqZtt3sZZsClsymw/QDuVfpNhoA31zeO
 github.com/felixge/httpsnoop v1.1.0/go.mod h1:Zqxgdd+1Rkcz8euOqdr7lqgCRJztwr5hp9vDSi5UZCE=
 github.com/fluxcd/flux2/v2 v2.9.6 h1:YuJCLztSqTJ+b39OZ2JYtOnc3R6dPn63ElhXX8NM524=
 github.com/fluxcd/flux2/v2 v2.9.6/go.mod h1:d00dggKAlNZv9RgdPLVX5i2l01bxcjHStGKFwngOq6Y=
-github.com/fluxcd/helm-controller/api v1.6.5 h1:ElqM5KIpdUwVK1VSi1fXcMwOlf0LghuqwM2SwqaTyNs=
-github.com/fluxcd/helm-controller/api v1.6.5/go.mod h1:mYa4WKwgCCE59dMdYzOJI6B17/wofN6wtmtjWWEQesQ=
+github.com/fluxcd/helm-controller/api v1.7.1 h1:kARTcSBiS05mQsY7nVdL+XGaIGPZd/oC5owFTN6NIyk=
+github.com/fluxcd/helm-controller/api v1.7.1/go.mod h1:cCTRZcz/hjvI+3AxRGgsGe/AeEjZHHKUYxV/+6uidNM=
 github.com/fluxcd/kustomize-controller/api v1.9.6 h1:7XiuW+l3YYXWeIwLJ8w34zHlJyMUEKosBIxLIki9J3I=
 github.com/fluxcd/kustomize-controller/api v1.9.6/go.mod h1:oRSEvNgNs07P6Tu3xtRigWxnxLkUCqatxbDv+gG3tLI=
 github.com/fluxcd/pkg/apis/acl v0.12.0 h1:UWpZDqKxpKDW38wdXIMHV8Uv3POPu2vUrra0JH1frH0=
@@ -53,8 +53,8 @@ github.com/fluxcd/pkg/runtime v0.122.0 h1:5nT+3PqbRvnzIMBNW6g/lIqsg6B715zaF12J3K
 github.com/fluxcd/pkg/runtime v0.122.0/go.mod h1:46y8/GVMFotQkQxzzePecv7cn09DLbQhq6cl2VQ5l9A=
 github.com/fluxcd/pkg/tar v1.2.0 h1:T6WFB5M0YRHktlrgdKNskqpdp76TVDdWTOeuWz33CFs=
 github.com/fluxcd/pkg/tar v1.2.0/go.mod h1:Wlalp5vIVe+BbckkKkqExKcoHAeeWJPAzwK7ONeFcS0=
-github.com/fluxcd/source-controller/api v1.9.6 h1:h9+CsJVw4CNbMEsnEb11SGEhLfKzVTkWC0w7M8VX4Hk=
-github.com/fluxcd/source-controller/api v1.9.6/go.mod h1:Y5mcHYzML/mJYjvSJRcIo7eLLjd+cZjnKR6WeIGrouE=
+github.com/fluxcd/source-controller/api v1.10.1 h1:DqqIctqpgyZvPCjpJUFwWjUM063Y5xblsLqxmxQxcac=
+github.com/fluxcd/source-controller/api v1.10.1/go.mod h1:ar4cOwOZ9aMei+7eChKuJFJmnN1Mm5LOTZ9q46Yp4c0=
 github.com/fsnotify/fsnotify v1.10.1 h1:b0/UzAf9yR5rhf3RPm9gf3ehBPpf0oZKIjtpKrx59Ho=
 github.com/fsnotify/fsnotify v1.10.1/go.mod h1:TLheqan6HD6GBK6PrDWyDPBaEV8LspOxvPSjC+bVfgo=
 github.com/fxamacker/cbor/v2 v2.9.3 h1:oQBnFATpNdY8gJHTndDDv5Xl4QqNaz51G5LLEPhng3Q=
@@ -157,10 +157,10 @@ github.com/openmcp-project/controller-utils v0.34.0 h1:VKbxGtt8T7ojnCqcAcQEdzBCk
 github.com/openmcp-project/controller-utils v0.34.0/go.mod h1:C7EAh6pdVGXg4NaaZsZ1kHxNEPyk7RH4O9cShLWcnII=
 github.com/openmcp-project/opencontrolplane-runtime v1.4.2 h1:wg+Mvp+6D0HSOGr9n2MprpLCkIDmWMPosIBHMBacTlw=
 github.com/openmcp-project/opencontrolplane-runtime v1.4.2/go.mod h1:qljeWi2NapDSp+bZsKPaWa+p2a497VmWTpAZJBugkUs=
-github.com/openmcp-project/openmcp-operator/api v1.4.4 h1:Ol/dHPVLAClRlWr0KvG9q+ttAjnJz5IwJM+ldGzVdLM=
-github.com/openmcp-project/openmcp-operator/api v1.4.4/go.mod h1:9xHl3vGIz+8J6Y/ialOH/Iak/n1NUNyyJ8ATKC167wY=
-github.com/openmcp-project/openmcp-operator/lib v1.4.4 h1:B4gFkst4yo2CCvh0OPGuKsIUP6JM4FwbrR7PD9uriSw=
-github.com/openmcp-project/openmcp-operator/lib v1.4.4/go.mod h1:7RomdLfTfTEKhOViKPoAHTvwbjNJS0TfPyvLx5P1vGU=
+github.com/openmcp-project/openmcp-operator/api v1.4.5 h1:voi/0DxnbEvyn13mMPW+5Bzac9+pE2P9r+21LYCX5R0=
+github.com/openmcp-project/openmcp-operator/api v1.4.5/go.mod h1:CV+5zOszLVPMinTPIISUHjc4eVmS2P6+aGkEQAmO2O4=
+github.com/openmcp-project/openmcp-operator/lib v1.4.5 h1:tI6eQn5n92khVRHMx4O98bl9qsAPyuTMlECY2rlyhs8=
+github.com/openmcp-project/openmcp-operator/lib v1.4.5/go.mod h1:nwolIO5vqfC2nUfALmqVYF7nTAJarb8ju9RZhUohpwY=
 github.com/openmcp-project/openmcp-testing v1.4.2 h1:R8pdLVk8IYDVhsjCxjEbrvtfw6aIpvymNRrSTsDZLz4=
 github.com/openmcp-project/openmcp-testing v1.4.2/go.mod h1:6wmyWSQXCAv/4TlY5D+OHfvBQT/115b8jvtad00zJwc=
 github.com/pelletier/go-toml v1.9.5 h1:4yBQzkHv+7BHq2PQUZF3Mx0IYxG7LsP222s7Agd3ve8=
